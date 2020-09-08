@@ -1,7 +1,7 @@
 import datajoint as dj
 from pipeline import lab, get_schema_name
 from foraging_inspector import behavior_foraging
-
+from tqdm import tqdm 
 try:
     import ray
     #%%
@@ -50,7 +50,7 @@ def populatemytables(paralel = True, cores = 9):
         if use_ray:
             ray.init(num_cpus = cores)
             arguments = {'display_progress' : False, 'reserve_jobs' : True,'order' : 'random'}
-            
+
             for runround in [1]:
                 print('round '+str(runround)+' of populate')
                 result_ids = []
@@ -59,14 +59,15 @@ def populatemytables(paralel = True, cores = 9):
                 ray.get(result_ids)
             ray.shutdown()
         else:  # Use multiprocessing
-            arguments = {'display_progress' : False, 'reserve_jobs' : True, 'order' : 'random'}
-          
+            arguments = {'display_progress' : False, 'reserve_jobs' : True, 'order' : 'random', 'max_calls': 100}
+
             for runround in [1]:
                 print('round '+str(runround)+' of populate')
                 
-                result_ids = [pool.apply_async(populatemytables_core_paralel, args = (arguments,runround)) for coreidx in range(cores)] 
+                # Distribute 1000 populations to all the cores, which enables progress bar with multiprocessing
+                result_ids = [pool.apply_async(populatemytables_core_paralel, args = (arguments, runround)) for _ in range(10000)]
                 
-                for result_id in result_ids:
+                for result_id in tqdm(result_ids, total = 10000, desc='apply_async'):
                     result_id.get()
 
         
@@ -82,7 +83,7 @@ def populatemytables(paralel = True, cores = 9):
             
 if __name__ == '__main__' and use_ray == False:  # This is a workaround for mp.apply_async to run in Windows
 
-    cores = int(mp.cpu_count()) - 2  # Auto core number selection
+    cores = int(mp.cpu_count()) - 2   # Auto core number selection
     pool = mp.Pool(processes=cores)
     
     populatemytables(paralel=True, cores=cores)
