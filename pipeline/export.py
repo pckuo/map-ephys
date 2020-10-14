@@ -487,16 +487,33 @@ def write_to_activity_viewer(insert_keys, output_dir='./'):
             'unit', 'ccf_x', 'ccf_y', 'ccf_z', 'unit_amp', 'unit_snr', 'avg_firing_rate',
             'isi_violation', 'waveform', 'unit_psth', order_by='unit')
 
-        unit_stats = ["unit_amp", "unit_snr", "avg_firing_rate", "isi_violation"]
-        timeseries = ["unit_psth"]
+        q_unit_left = (ephys.UnitStat * ephys.Unit * lab.ElectrodeConfig.Electrode
+                  * histology.ElectrodeCCFPosition.ElectrodePosition * psth.UnitPsth
+                  & key & 'unit_quality != "all"' & 'trial_condition_name in ("good_noearlylick_left_hit")')
+
+        unit_psth_left = q_unit.fetch('unit_psth', order_by='unit')
+
+        q_unit_right = (ephys.UnitStat * ephys.Unit * lab.ElectrodeConfig.Electrode
+                  * histology.ElectrodeCCFPosition.ElectrodePosition * psth.UnitPsth
+                  & key & 'unit_quality != "all"' & 'trial_condition_name in ("good_noearlylick_right_hit")')
+
+        unit_psth_right = q_unit.fetch('unit_psth', order_by='unit')
+
+        unit_stats = ["unit_amp", "unit_snr", "avg_firing_rate", "isi_violation", "ccf_AP", "ccf_DV", "ccf_LR"]
+        timeseries = ["unit_psth", "unit_select"]
         waveform = np.stack(waveform)
         spike_rates = np.array([d[0] for d in unit_psth])
+        spike_rates_left = np.array([d[0] for d in unit_psth_left])
+        spike_rates_right = np.array([d[0] for d in unit_psth_right])
         edges = unit_psth[0][1] if unit_psth[0][1].shape == unit_psth[0][0].shape else unit_psth[0][1][1:]
         unit_psth = np.vstack((edges, spike_rates))
+        unit_select = np.vstack((edges, spike_rates_right-spike_rates_left))
         ccf_coord = np.transpose(np.vstack((ccf_z, ccf_y, 11400 - ccf_x)))
-
+        import pdb; pdb.set_trace()
         filepath = pathlib.Path(output_dir) / uid
 
         np.savez(filepath, probe_insertion=uid, unit_id=unit_id, ccf_coord=ccf_coord, waveform=waveform,
-                 timeseries=timeseries, unit_stats=unit_stats, unit_amp=unit_amp, unit_snr=unit_snr,
-                 avg_firing_rate=avg_firing_rate, isi_violation=isi_violation, unit_psth=unit_psth)
+                 timeseries=timeseries, unit_stats=unit_stats, unit_amp=unit_amp, unit_snr=unit_snr, ccf_AP=ccf_z, ccf_DV=ccf_y, ccf_LR=11400 - ccf_x,
+                 avg_firing_rate=avg_firing_rate, isi_violation=isi_violation, unit_psth=unit_psth, unit_select=unit_select)
+        
+        
