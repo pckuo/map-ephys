@@ -400,6 +400,8 @@ class BehaviorBpodIngest(dj.Imported):
     @property
     def key_source(self):
         key_source = []
+        
+        from pipeline import ephys
 
         IDs = {k: v for k, v in zip(*lab.WaterRestriction().fetch(
             'water_restriction_number', 'subject_id'))}
@@ -432,9 +434,12 @@ class BehaviorBpodIngest(dj.Imported):
                             log.info('Unable to parse session date: {}. Skipping...'.format(
                                 df_wr_row.Date))
                             continue
-
+                    
                     if not (experiment.Session & {'subject_id': subject_id_now,
-                                                  'session_date': date_now}):
+                                                  'session_date': date_now}) \
+                    or ((experiment.Session & (experiment.TrialEvent & 'trial_event_type = "videostart"')) 
+                        & {'subject_id': subject_id_now, 'session_date': date_now}):
+                        
                         key_source.append({'subject_id': subject_id_now,
                                            'session_date': date_now,
                                            'session_comment': str(df_wr_row['Notes']),
@@ -568,9 +573,10 @@ class BehaviorBpodIngest(dj.Imported):
                     continue   # Another integrity check here
 
                 log.debug('synthesizing session ID')
-                key['session'] = (dj.U().aggr(experiment.Session()
-                                              & {'subject_id': subject_id_now},
-                                              n='max(session)').fetch1('n') or 0) + 1
+                key['session'] = (experiment.Session & key).fetch1('session')  # Hack session number
+                # key['session'] = (dj.U().aggr(experiment.Session()
+                #                               & {'subject_id': subject_id_now},
+                #                               n='max(session)').fetch1('n') or 0) + 1
                 sess_key = {**key,
                             'session_time': session_time.time(),
                             'username': df_behavior_session['experimenter'][0],
@@ -692,7 +698,7 @@ class BehaviorBpodIngest(dj.Imported):
                 #    They are far from each other because I start the bpod trial at the middle of ITI (Foraging_bpod: e9a8ffd6) to cover video recording during ITI.
                 # 3. In theory, *bitcodestart* = *delay* (since there's no sample period),
                 #    but in practice, the bitcode (21*20=420 ms) and lickport movement (~100 ms) also take some time.
-                #    Note that bpod doesn't know the exact time when lickports are in place, so we can get *delay* only from NIDQ zaber channel.
+                #    Note that bpod doesn't know the exact time when lickports are in place, so we can get *delay* only from NIDQ zaber channel (ephys.TrialEvent.'zaberinposition').
                 # 4. In early lick trials, effective delay start should be the last 'DelayStart' (?)
                 # 5. Finally, to perform session-wise alignment between behavior and ephys, there are two ways, which could be cross-checked with each other:
                 #       (1) (most straightforward) use all event markers directly from NIDQ bitcode.mat,
@@ -718,6 +724,7 @@ class BehaviorBpodIngest(dj.Imported):
                                            'reward': [f'Reward_{lickport}' for lickport in self.water_port_name_mapper.values()],
                                            'doubledip': ['Double_dipped'],   # Only for non-double-dipped trials, ITI = last lick + 1 sec (maybe I should not use double dipping punishment for ehpys?)
                                            'trialend': ['ITI'],
+                                           'videoend': ['ITIAfterVideoOff'],
                                            }
 
                 for trial_event_type, bpod_state in bpod_states_of_interest.items():
@@ -880,60 +887,60 @@ class BehaviorBpodIngest(dj.Imported):
         # ---- The insertions to relevant tables ----
         # Session, SessionComment, SessionDetails insert
         log.info('BehaviorIngest.make(): adding session record')
-        experiment.Session.insert1(sess_key, ignore_extra_fields=True)
-        experiment.SessionComment.insert1(sess_key, ignore_extra_fields=True)
-        experiment.SessionDetails.insert1(sess_key, ignore_extra_fields=True)
+        # experiment.Session.insert1(sess_key, ignore_extra_fields=True)
+        # experiment.SessionComment.insert1(sess_key, ignore_extra_fields=True)
+        # experiment.SessionDetails.insert1(sess_key, ignore_extra_fields=True)
 
         # Behavior Insertion
-        insert_settings = {'ignore_extra_fields': True, 'allow_direct_insert': True}
+        insert_settings = {'ignore_extra_fields': True, 'allow_direct_insert': True, 'skip_duplicates': True}
 
-        log.info('BehaviorIngest.make(): bulk insert phase')
+        # log.info('BehaviorIngest.make(): bulk insert phase')
 
-        log.info('BehaviorIngest.make(): ... experiment.Session.Trial')
-        experiment.SessionTrial.insert(concat_rows['sess_trial'], **insert_settings)
+        # log.info('BehaviorIngest.make(): ... experiment.Session.Trial')
+        # experiment.SessionTrial.insert(concat_rows['sess_trial'], **insert_settings)
 
-        log.info('BehaviorIngest.make(): ... experiment.BehaviorTrial')
-        experiment.BehaviorTrial.insert(concat_rows['behavior_trial'], **insert_settings)
+        # log.info('BehaviorIngest.make(): ... experiment.BehaviorTrial')
+        # experiment.BehaviorTrial.insert(concat_rows['behavior_trial'], **insert_settings)
 
-        log.info('BehaviorIngest.make(): ... experiment.WaterPortChoice')
-        experiment.WaterPortChoice.insert(concat_rows['trial_choice'], **insert_settings)
+        # log.info('BehaviorIngest.make(): ... experiment.WaterPortChoice')
+        # experiment.WaterPortChoice.insert(concat_rows['trial_choice'], **insert_settings)
 
-        log.info('BehaviorIngest.make(): ... experiment.TrialNote')
-        experiment.TrialNote.insert(concat_rows['trial_note'], **insert_settings)
+        # log.info('BehaviorIngest.make(): ... experiment.TrialNote')
+        # experiment.TrialNote.insert(concat_rows['trial_note'], **insert_settings)
 
         log.info('BehaviorIngest.make(): ... experiment.TrialEvent')
         experiment.TrialEvent.insert(concat_rows['trial_event'], **insert_settings)
 
-        log.info('BehaviorIngest.make(): ... experiment.ActionEvent')
-        experiment.ActionEvent.insert(concat_rows['action_event'], **insert_settings)
+        # log.info('BehaviorIngest.make(): ... experiment.ActionEvent')
+        # experiment.ActionEvent.insert(concat_rows['action_event'], **insert_settings)
 
-        log.info('BehaviorIngest.make(): ... experiment.SessionBlock')
-        experiment.SessionBlock.insert(concat_rows['sess_block'], **insert_settings)
-        experiment.SessionBlock.BlockTrial.insert(concat_rows['sess_block_trial'],
-                                                  **insert_settings)
-        block_reward_prob = []
-        for block in concat_rows['sess_block']:
-            block_reward_prob.extend(
-                [{**block, 'water_port': water_port, 'reward_probability': reward_p}
-                                      for water_port, reward_p in block.pop('reward_probability').items()])
-        experiment.SessionBlock.WaterPortRewardProbability.insert(block_reward_prob,
-                                                                  **insert_settings)
+        # log.info('BehaviorIngest.make(): ... experiment.SessionBlock')
+        # experiment.SessionBlock.insert(concat_rows['sess_block'], **insert_settings)
+        # experiment.SessionBlock.BlockTrial.insert(concat_rows['sess_block_trial'],
+        #                                           **insert_settings)
+        # block_reward_prob = []
+        # for block in concat_rows['sess_block']:
+        #     block_reward_prob.extend(
+        #         [{**block, 'water_port': water_port, 'reward_probability': reward_p}
+        #                               for water_port, reward_p in block.pop('reward_probability').items()])
+        # experiment.SessionBlock.WaterPortRewardProbability.insert(block_reward_prob,
+        #                                                           **insert_settings)
 
-        log.info('BehaviorIngest.make(): ... experiment.TrialAvailableReward')
-        experiment.TrialAvailableReward.insert(concat_rows['available_reward'],
-                                               **insert_settings)
+        # log.info('BehaviorIngest.make(): ... experiment.TrialAvailableReward')
+        # experiment.TrialAvailableReward.insert(concat_rows['available_reward'],
+        #                                        **insert_settings)
 
-        log.info('BehaviorIngest.make(): ... experiment.WaterValveSetting')
-        experiment.WaterPortSetting.insert(concat_rows['valve_setting'], **insert_settings)
-        experiment.WaterPortSetting.OpenDuration.insert(concat_rows['valve_open_dur'],
-                                                        **insert_settings)
+        # log.info('BehaviorIngest.make(): ... experiment.WaterValveSetting')
+        # experiment.WaterPortSetting.insert(concat_rows['valve_setting'], **insert_settings)
+        # experiment.WaterPortSetting.OpenDuration.insert(concat_rows['valve_open_dur'],
+        #                                                 **insert_settings)
 
-        # Behavior Ingest Insertion
-        log.info('BehaviorBpodIngest.make(): saving ingest {}'.format(sess_key))
-        self.insert1(sess_key, **insert_settings)
-        self.BehaviorFile.insert(
-            [{**sess_key, 'behavior_file': pathlib.Path(s.path).as_posix()}
-                                  for s in sessions_now], **insert_settings)
+        # # Behavior Ingest Insertion
+        # log.info('BehaviorBpodIngest.make(): saving ingest {}'.format(sess_key))
+        # self.insert1(sess_key, **insert_settings)
+        # self.BehaviorFile.insert(
+        #     [{**sess_key, 'behavior_file': pathlib.Path(s.path).as_posix()}
+        #                           for s in sessions_now], **insert_settings)
 
 
 # --------------------- HELPER LOADER FUNCTIONS -----------------

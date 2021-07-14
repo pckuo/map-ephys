@@ -19,7 +19,7 @@ import numpy as np
 import datajoint as dj
 #import pdb
 
-from pipeline import lab, experiment, ephys, report
+from pipeline import lab, experiment, ephys, report, tracking
 from pipeline import InsertBuffer, dict_value_to_hash
 
 from .. import get_schema_name
@@ -68,13 +68,26 @@ class EphysIngest(dj.Imported):
         """
 
     # key_source = experiment.Session - ephys.ProbeInsertion
-    key_source = experiment.Session & (experiment.TrialNote() & 'trial_note_type = "bitcode"') - ephys.ProbeInsertion
-
+    # key_source = experiment.Session & (experiment.TrialNote() & 'trial_note_type = "bitcode"') - ephys.ProbeInsertion
+    # key_source = experiment.Session & ephys.Unit   # Reingest ephys
+    key_source = experiment.Session & ephys.Unit  & 'session>=57'   # Reingest ephys
+    
+    def populate(self, *args, **kwargs):
+        # 'populate' which won't require upstream tables
+        # 'reserve_jobs' not parallel, overloaded to mean "don't exit on error"                          
+        for k in self.key_source.fetch('KEY'):
+            try:
+                with dj.conn().transaction:
+                    self.make(k)
+            except Exception as e:
+                log.warning('session key {} error: {}'.format(k, repr(e)))
+                if not kwargs.get('reserve_jobs', False):
+                    raise
+                    
     def make(self, key):
         '''
         Ephys .make() function
         '''
-
         log.info('\n======================================================')
         log.info('EphysIngest().make(): key: {k}'.format(k=key))
 
@@ -113,6 +126,7 @@ class EphysIngest(dj.Imported):
         metrics = data['metrics']  # either None or a pd.DataFrame loaded from 'metrics.csv'
         creation_time = data['creation_time']
         clustering_label = data['clustering_label']
+        bitcode_raw = data['bitcode_raw']
 
         log.info('-- Start insertions for probe: {} - Clustering method: {} - Label: {}'.format(probe, method, clustering_label))
 
@@ -177,6 +191,13 @@ class EphysIngest(dj.Imported):
             trials = behav_trials[trial_indices]
 
         assert len(trial_start) == len(trials), 'Unequal number of bitcode "trial_start" ({}) and ingested behavior trials ({})'.format(len(trial_start), len(trials))
+
+        # -- Ingest time markers from NIDQ channels --
+        # This is redudant for delay response task because aligning spikes to the go-cue is enough (trial_spikes below)
+        # But this is critical for the foraging task, because we need global session-wise times to plot flexibly-aligned PSTHs (in particular, spikes during ITI).
+        # However, we CANNOT get this from behavior pybpod .csv files (PC-TIME is inaccurate, whereas BPOD-TIME is trial-based)
+        if probe == 1 and 'digMarkerPerTrial' in bitcode_raw:   # Only import once for one session
+            insert_ephys_events(skey, bitcode_raw)
 
         # trialize the spikes & subtract go cue
         t, trial_spikes, trial_units = 0, [], []
@@ -297,110 +318,110 @@ class EphysIngest(dj.Imported):
             # insert Unit
             log.info('.. ephys.Unit')
 
-            with InsertBuffer(ephys.Unit, 10, skip_duplicates=True,
-                              allow_direct_insert=True) as ib:
+            # with InsertBuffer(ephys.Unit, 10, skip_duplicates=True,
+            #                   allow_direct_insert=True) as ib:
 
-                for i, u in enumerate(set(units)):
-                    if method in ['jrclust_v3', 'jrclust_v4']:
-                        wf_chn_idx = 0
-                    elif method in ['kilosort2']:
-                        wf_chn_idx = np.where(data['ks_channel_map'] == vmax_unit_site[i])[0][0]
+            #     for i, u in enumerate(set(units)):
+            #         if method in ['jrclust_v3', 'jrclust_v4']:
+            #             wf_chn_idx = 0
+            #         elif method in ['kilosort2']:
+            #             wf_chn_idx = np.where(data['ks_channel_map'] == vmax_unit_site[i])[0][0]
 
-                    ib.insert1({**skey, **insertion_key,
-                                **site2electrode_map[vmax_unit_site[i]],
-                                'clustering_method': method,
-                                'unit': u,
-                                'unit_uid': u,
-                                'unit_quality': unit_notes[i],
-                                'unit_posx': unit_xpos[i],
-                                'unit_posy': unit_ypos[i],
-                                'unit_amp': unit_amp[i],
-                                'unit_snr': unit_snr[i],
-                                'spike_times': unit_spikes[i],
-                                'spike_sites': unit_spike_sites[i],
-                                'spike_depths': unit_spike_depths[i],
-                                'waveform': unit_wav[i][wf_chn_idx]})
+            #         ib.insert1({**skey, **insertion_key,
+            #                     **site2electrode_map[vmax_unit_site[i]],
+            #                     'clustering_method': method,
+            #                     'unit': u,
+            #                     'unit_uid': u,
+            #                     'unit_quality': unit_notes[i],
+            #                     'unit_posx': unit_xpos[i],
+            #                     'unit_posy': unit_ypos[i],
+            #                     'unit_amp': unit_amp[i],
+            #                     'unit_snr': unit_snr[i],
+            #                     'spike_times': unit_spikes[i],
+            #                     'spike_sites': unit_spike_sites[i],
+            #                     'spike_depths': unit_spike_depths[i],
+            #                     'waveform': unit_wav[i][wf_chn_idx]})
 
-                    if ib.flush():
-                        log.debug('.... {}'.format(u))
+            #         if ib.flush():
+            #             log.debug('.... {}'.format(u))
 
-            # insert Unit.UnitTrial
-            log.info('.. ephys.Unit.UnitTrial')
-            dj.conn().ping()
-            with InsertBuffer(ephys.Unit.UnitTrial, 10000, skip_duplicates=True,
-                              allow_direct_insert=True) as ib:
+            # # insert Unit.UnitTrial
+            # log.info('.. ephys.Unit.UnitTrial')
+            # dj.conn().ping()
+            # with InsertBuffer(ephys.Unit.UnitTrial, 10000, skip_duplicates=True,
+            #                   allow_direct_insert=True) as ib:
 
-                for i, u in enumerate(set(units)):
-                    for t in range(len(trials)):
-                        if len(unit_trial_spikes[i][t]):
-                            ib.insert1({**skey,
-                                        'insertion_number': probe,
-                                        'clustering_method': method,
-                                        'unit': u,
-                                        'trial': trials[t]})
-                            if ib.flush():
-                                log.debug('.... (u: {}, t: {})'.format(u, t))
+            #     for i, u in enumerate(set(units)):
+            #         for t in range(len(trials)):
+            #             if len(unit_trial_spikes[i][t]):
+            #                 ib.insert1({**skey,
+            #                             'insertion_number': probe,
+            #                             'clustering_method': method,
+            #                             'unit': u,
+            #                             'trial': trials[t]})
+            #                 if ib.flush():
+            #                     log.debug('.... (u: {}, t: {})'.format(u, t))
 
-            # insert TrialSpikes
-            log.info('.. ephys.Unit.TrialSpikes')
-            dj.conn().ping()
-            with InsertBuffer(ephys.Unit.TrialSpikes, 10000, skip_duplicates=True,
-                              allow_direct_insert=True) as ib:
-                for i, u in enumerate(set(units)):
-                    for t in range(len(trials)):
-                        ib.insert1({**skey,
-                                    'insertion_number': probe,
-                                    'clustering_method': method,
-                                    'unit': u,
-                                    'trial': trials[t],
-                                    'spike_times': unit_trial_spikes[i][t]})
-                        if ib.flush():
-                            log.debug('.... (u: {}, t: {})'.format(u, t))
+            # # insert TrialSpikes
+            # log.info('.. ephys.Unit.TrialSpikes')
+            # dj.conn().ping()
+            # with InsertBuffer(ephys.Unit.TrialSpikes, 10000, skip_duplicates=True,
+            #                   allow_direct_insert=True) as ib:
+            #     for i, u in enumerate(set(units)):
+            #         for t in range(len(trials)):
+            #             ib.insert1({**skey,
+            #                         'insertion_number': probe,
+            #                         'clustering_method': method,
+            #                         'unit': u,
+            #                         'trial': trials[t],
+            #                         'spike_times': unit_trial_spikes[i][t]})
+            #             if ib.flush():
+            #                 log.debug('.... (u: {}, t: {})'.format(u, t))
 
-            if metrics is not None:
-                metrics.columns = [c.lower() for c in metrics.columns]  # lower-case col names
-                # -- confirm correct attribute names from the PD
-                required_columns = np.setdiff1d(ephys.ClusterMetric.heading.names + ephys.WaveformMetric.heading.names,
-                                                ephys.Unit.primary_key)
-                missing_columns = np.setdiff1d(required_columns, metrics.columns)
+            # if metrics is not None:
+            #     metrics.columns = [c.lower() for c in metrics.columns]  # lower-case col names
+            #     # -- confirm correct attribute names from the PD
+            #     required_columns = np.setdiff1d(ephys.ClusterMetric.heading.names + ephys.WaveformMetric.heading.names,
+            #                                     ephys.Unit.primary_key)
+            #     missing_columns = np.setdiff1d(required_columns, metrics.columns)
 
-                if len(missing_columns) > 0:
-                    raise ClusterMetricError('Missing or misnamed column(s) in metrics.csv: {}'.format(missing_columns))
+            #     if len(missing_columns) > 0:
+            #         raise ClusterMetricError('Missing or misnamed column(s) in metrics.csv: {}'.format(missing_columns))
 
-                metrics = dict(metrics.T)
+            #     metrics = dict(metrics.T)
 
-                log.info('.. inserting cluster metrics and waveform metrics')
-                dj.conn().ping()
-                ephys.ClusterMetric.insert([{**skey, 'insertion_number': probe,
-                                             'clustering_method': method, 'unit': u, **metrics[u]}
-                                            for u in set(units)],
-                                           ignore_extra_fields=True, allow_direct_insert=True)
-                ephys.WaveformMetric.insert([{**skey, 'insertion_number': probe,
-                                              'clustering_method': method, 'unit': u, **metrics[u]}
-                                             for u in set(units)],
-                                            ignore_extra_fields=True, allow_direct_insert=True)
-                ephys.UnitStat.insert([{**skey, 'insertion_number': probe,
-                                        'clustering_method': method, 'unit': u,
-                                        'isi_violation': metrics[u]['isi_viol'],
-                                        'avg_firing_rate': metrics[u]['firing_rate']} for u in set(units)],
-                                      allow_direct_insert=True)
+            #     log.info('.. inserting cluster metrics and waveform metrics')
+            #     dj.conn().ping()
+            #     ephys.ClusterMetric.insert([{**skey, 'insertion_number': probe,
+            #                                  'clustering_method': method, 'unit': u, **metrics[u]}
+            #                                 for u in set(units)],
+            #                                ignore_extra_fields=True, allow_direct_insert=True)
+            #     ephys.WaveformMetric.insert([{**skey, 'insertion_number': probe,
+            #                                   'clustering_method': method, 'unit': u, **metrics[u]}
+            #                                  for u in set(units)],
+            #                                 ignore_extra_fields=True, allow_direct_insert=True)
+            #     ephys.UnitStat.insert([{**skey, 'insertion_number': probe,
+            #                             'clustering_method': method, 'unit': u,
+            #                             'isi_violation': metrics[u]['isi_viol'],
+            #                             'avg_firing_rate': metrics[u]['firing_rate']} for u in set(units)],
+            #                           allow_direct_insert=True)
 
-            dj.conn().ping()
-            log.info('.. inserting clustering timestamp and label')
+            # dj.conn().ping()
+            # log.info('.. inserting clustering timestamp and label')
 
-            ephys.ClusteringLabel.insert([{**skey, 'insertion_number': probe,
-                                           'clustering_method': method, 'unit': u,
-                                           'clustering_time': creation_time,
-                                           'quality_control': bool('qc' in clustering_label),
-                                           'manual_curation': bool('curated' in clustering_label)} for u in set(units)],
-                                         allow_direct_insert=True)
+            # ephys.ClusteringLabel.insert([{**skey, 'insertion_number': probe,
+            #                                'clustering_method': method, 'unit': u,
+            #                                'clustering_time': creation_time,
+            #                                'quality_control': bool('qc' in clustering_label),
+            #                                'manual_curation': bool('curated' in clustering_label)} for u in set(units)],
+            #                              allow_direct_insert=True)
 
-            log.info('.. inserting file load information')
+            # log.info('.. inserting file load information')
 
-            self.insert1(skey, skip_duplicates=True, allow_direct_insert=True)
-            self.EphysFile.insert1(
-                {**skey, 'probe_insertion_number': probe,
-                 'ephys_file': ef_path.relative_to(rigpath).as_posix()}, allow_direct_insert=True)
+            # self.insert1(skey, skip_duplicates=True, allow_direct_insert=True)
+            # self.EphysFile.insert1(
+            #     {**skey, 'probe_insertion_number': probe,
+            #      'ephys_file': ef_path.relative_to(rigpath).as_posix()}, allow_direct_insert=True)
 
             log.info('-- ephys ingest for {} - probe {} complete'.format(skey, probe))
 
@@ -522,9 +543,9 @@ def _gen_probe_insert(sinfo, probe, npx_meta, probe_insertion_exists=False):
 
         lab.Probe.insert1({'probe': part_no, 'probe_type': e_config_key['probe_type']}, skip_duplicates=True)
 
-        ephys.ProbeInsertion.insert1({**insertion_key,  **e_config_key, 'probe': part_no})
+        # ephys.ProbeInsertion.insert1({**insertion_key,  **e_config_key, 'probe': part_no})
 
-        ephys.ProbeInsertion.RecordingSystemSetup.insert1({**insertion_key, 'sampling_rate': npx_meta.meta['imSampRate']})
+        # ephys.ProbeInsertion.RecordingSystemSetup.insert1({**insertion_key, 'sampling_rate': npx_meta.meta['imSampRate']})
 
     return insertion_key, e_config_key
 
@@ -616,7 +637,7 @@ def _load_jrclust_v3(sinfo, fpath):
 
     # -- trial-info from bitcode --
     try:
-        sync_behav, sync_ephys, trial_fix, trial_go, trial_start = read_bitcode(fpath.parent, h2o, skey)
+        sync_behav, sync_ephys, trial_fix, trial_go, trial_start, _ = read_bitcode(fpath.parent, h2o, skey)
     except FileNotFoundError as e:
         raise e
 
@@ -702,7 +723,7 @@ def _load_jrclust_v4(sinfo, fpath):
 
     # -- trial-info from bitcode --
     try:
-        sync_behav, sync_ephys, trial_fix, trial_go, trial_start = read_bitcode(fpath.parent, h2o, skey)
+        sync_behav, sync_ephys, trial_fix, trial_go, trial_start, _ = read_bitcode(fpath.parent, h2o, skey)
     except FileNotFoundError as e:
         raise e
 
@@ -773,7 +794,7 @@ def _load_kilosort2(sinfo, ks_dir, npx_dir):
 
     # -- trial-info from bitcode --
     try:
-        sync_behav, sync_ephys, trial_fix, trial_go, trial_start = read_bitcode(npx_dir, h2o, skey)
+        sync_behav, sync_ephys, trial_fix, trial_go, trial_start, bitcode_raw = read_bitcode(npx_dir, h2o, skey)
     except FileNotFoundError as e:
         raise e
 
@@ -889,6 +910,7 @@ def _load_kilosort2(sinfo, ks_dir, npx_dir):
         'creation_time': creation_time,
         'clustering_label': clustering_label,
         'ks_channel_map': ks.data['channel_map'] + 1,  # channel numbering in this pipeline is 1-based indexed
+        'bitcode_raw': bitcode_raw,
     }
 
     return data
@@ -1013,7 +1035,7 @@ def read_bitcode(bitcode_dir, h2o, skey):
 
         ephys_trial_start_times = bf['sTrig'].flatten()  # trial start
         ephys_trial_ref_times = bf['goCue'].flatten()  # trial go cues
-
+        
         # check if there are `FreeWater` trials (i.e. no trial_go), if so, set those with trial_go value of NaN
         if len(ephys_trial_ref_times) < len(ephys_trial_start_times):
 
@@ -1063,7 +1085,67 @@ def read_bitcode(bitcode_dir, h2o, skey):
     else:
         raise ValueError('Unknown bitcode format: {}'.format(bitcode_format))
 
-    return behavior_bitcodes, ephys_bitcodes, trial_numbers, ephys_trial_ref_times, ephys_trial_start_times
+    return behavior_bitcodes, ephys_bitcodes, trial_numbers, ephys_trial_ref_times, ephys_trial_start_times, bf
+
+
+def insert_ephys_events(skey, bf):
+    '''
+    all times are session-based
+    '''
+    
+    # --- Events available both from behavior .csv file (trial time) and ephys NIDQ (session time) ---
+    # digMarkerPerTrial from bitcode.mat: [STRIG_, GOCUE_, CHOICEL_, CHOICER_, REWARD_, ITI_, BPOD_START_, ZABER_IN_POS_]
+    # <--> ephys.TrialEventType: 'bitcodestart', 'go', 'choice', 'choice', 'reward', 'trialend', 'bpodstart', 'zaberinposition'
+    log.info('.... insert_ephys_events() ...')
+    log.info('       loading ephys events from NIDQ ...')
+    df = pd.DataFrame()
+    headings = bf['headings'][0]
+    digMarkerPerTrial = bf['digMarkerPerTrial']
+    
+    for col, event_type in enumerate(headings):
+        times = digMarkerPerTrial[:, col]
+        not_nan = np.where(~np.isnan(times))[0]
+        trials = not_nan + 1   # Trial all starts from 1
+        df = df.append(pd.DataFrame({**skey,
+                           'trial': trials,
+                           'trial_event_id': col,
+                           'trial_event_type': event_type[0],
+                           'trial_event_time': times[not_nan]}
+                                    )
+                       )
+
+    # --- Zaber pulses (only available from ephys NIDQ) ---
+    if 'zaberPerTrial' in bf:
+        for trial, pulses in enumerate(bf['zaberPerTrial'][0]):
+            df = df.append(pd.DataFrame({**skey,
+                               'trial': trial + 1,   # Trial all starts from 1
+                               'trial_event_id': np.arange(len(pulses)) + len(headings),
+                               'trial_event_type': 'zaberstep',
+                               'trial_event_time': pulses.flatten()}
+                                        )
+                           )
+
+    # --- Do batch insertion --
+    ephys.TrialEvent.insert(df, allow_direct_insert=True)
+
+    # --- Camera frames (only available from ephys NIDQ) ---
+    if 'cameraPerTrial' in bf:
+        log.info('       loading camera frames from NIDQ ...')
+
+        _idx = [_idx for _idx, field in enumerate(bf['chan'].dtype.descr) if 'cameraNameInDJ' in field][0]
+        cameras = bf['chan'][0,0][_idx][0,:]
+        for camera, all_frames in zip(cameras, bf['cameraPerTrial'][0]):
+            for trial, frames in enumerate(all_frames[0]):
+                key = {**skey,
+                       'trial': trial + 1,  # Trial all starts from 1
+                       'tracking_device': camera[0]}
+                tracking.Tracking.insert1({**key,
+                                           'tracking_samples': len(frames)},
+                                          allow_direct_insert=True)
+                tracking.Tracking.Frame.insert1({**key,
+                                                  'frame_time': frames.flatten()},
+                                                 allow_direct_insert=True)
+    log.info('.... insert_ephys_events() Done! ...')
 
 
 def build_bitcode(bitcode_dir):
