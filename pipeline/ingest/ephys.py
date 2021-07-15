@@ -70,7 +70,7 @@ class EphysIngest(dj.Imported):
     # key_source = experiment.Session - ephys.ProbeInsertion
     # key_source = experiment.Session & (experiment.TrialNote() & 'trial_note_type = "bitcode"') - ephys.ProbeInsertion
     # key_source = experiment.Session & ephys.Unit   # Reingest ephys
-    key_source = experiment.Session & ephys.Unit  & 'session>=57'   # Reingest ephys
+    key_source = experiment.Session & ephys.Unit   # Reingest ephys
     
     def populate(self, *args, **kwargs):
         # 'populate' which won't require upstream tables
