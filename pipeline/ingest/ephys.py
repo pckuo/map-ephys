@@ -70,7 +70,7 @@ class EphysIngest(dj.Imported):
     # key_source = experiment.Session - ephys.ProbeInsertion
     # key_source = experiment.Session & (experiment.TrialNote() & 'trial_note_type = "bitcode"') - ephys.ProbeInsertion
     # key_source = experiment.Session & ephys.Unit   # Reingest ephys
-    key_source = experiment.Session & ephys.Unit   # Reingest ephys
+    key_source = experiment.Session & ephys.Unit & 'session>50'  # Reingest ephys
     
     def populate(self, *args, **kwargs):
         # 'populate' which won't require upstream tables
@@ -1098,53 +1098,80 @@ def insert_ephys_events(skey, bf):
     # <--> ephys.TrialEventType: 'bitcodestart', 'go', 'choice', 'choice', 'reward', 'trialend', 'bpodstart', 'zaberinposition'
     log.info('.... insert_ephys_events() ...')
     log.info('       loading ephys events from NIDQ ...')
-    df = pd.DataFrame()
-    headings = bf['headings'][0]
-    digMarkerPerTrial = bf['digMarkerPerTrial']
-    
-    for col, event_type in enumerate(headings):
-        times = digMarkerPerTrial[:, col]
-        not_nan = np.where(~np.isnan(times))[0]
-        trials = not_nan + 1   # Trial all starts from 1
-        df = df.append(pd.DataFrame({**skey,
-                           'trial': trials,
-                           'trial_event_id': col,
-                           'trial_event_type': event_type[0],
-                           'trial_event_time': times[not_nan]}
-                                    )
-                       )
-
-    # --- Zaber pulses (only available from ephys NIDQ) ---
-    if 'zaberPerTrial' in bf:
-        for trial, pulses in enumerate(bf['zaberPerTrial'][0]):
-            df = df.append(pd.DataFrame({**skey,
-                               'trial': trial + 1,   # Trial all starts from 1
-                               'trial_event_id': np.arange(len(pulses)) + len(headings),
-                               'trial_event_type': 'zaberstep',
-                               'trial_event_time': pulses.flatten()}
-                                        )
-                           )
+    # df = pd.DataFrame()
+    # headings = bf['headings'][0]
+    # digMarkerPerTrial = bf['digMarkerPerTrial']
+    #
+    # for col, event_type in enumerate(headings):
+    #     times = digMarkerPerTrial[:, col]
+    #     not_nan = np.where(~np.isnan(times))[0]
+    #     trials = not_nan + 1   # Trial all starts from 1
+    #     df = df.append(pd.DataFrame({**skey,
+    #                        'trial': trials,
+    #                        'trial_event_id': col,
+    #                        'trial_event_type': event_type[0],
+    #                        'trial_event_time': times[not_nan]}
+    #                                 )
+    #                    )
+    #
+    # # --- Zaber pulses (only available from ephys NIDQ) ---
+    # if 'zaberPerTrial' in bf:
+    #     for trial, pulses in enumerate(bf['zaberPerTrial'][0]):
+    #         df = df.append(pd.DataFrame({**skey,
+    #                            'trial': trial + 1,   # Trial all starts from 1
+    #                            'trial_event_id': np.arange(len(pulses)) + len(headings),
+    #                            'trial_event_type': 'zaberstep',
+    #                            'trial_event_time': pulses.flatten()}
+    #                                     )
+    #                        )
 
     # --- Do batch insertion --
-    ephys.TrialEvent.insert(df, allow_direct_insert=True)
+    # ephys.TrialEvent.insert(df, allow_direct_insert=True)
+
+    # --- Licks from NI --
+    df_action = pd.DataFrame()
+    lick_wrapper = {'left lick': 'lickLPerTrial', 'right lick': 'lickRPerTrial', 'middle lick': 'lickMPerTrial'}
+    exist_lick = [ltype for ltype in lick_wrapper.keys() if lick_wrapper[ltype] in bf]
+
+    if len(exist_lick):
+        log.info(f'       loading licks from NIDQ ...')
+        
+        for trial, *licks in enumerate(zip(*(bf[lick_wrapper[ltype]][0] for ltype in exist_lick))):
+            lick_times = {ltype: ltime for ltype, ltime in zip(exist_lick, *licks)}
+            all_lick_types = np.concatenate(
+                [[ltype] * len(ltimes) for ltype, ltimes in lick_times.items()])
+            all_lick_times = np.concatenate(
+                [ltimes for ltimes in lick_times.values()]).flatten()
+            sorted_licks = sorted(zip(all_lick_types, all_lick_times), key=lambda x: x[-1])  # sort by lick times
+            df_action = df_action.append(pd.DataFrame([{ **skey,
+                                                         'trial': trial + 1,  # Trial all starts from 1
+                                                         'action_event_id': idx,  # Event_id starts from 0
+                                                         'action_event_type': ltype,
+                                                         'action_event_time': ltime
+                                                         } for idx, (ltype, ltime)
+                                                       in enumerate(sorted_licks)
+                                                       ]))
+
+        # --- Do batch insertion --
+        ephys.ActionEvent.insert(df_action, allow_direct_insert=True)
 
     # --- Camera frames (only available from ephys NIDQ) ---
-    if 'cameraPerTrial' in bf:
-        log.info('       loading camera frames from NIDQ ...')
-
-        _idx = [_idx for _idx, field in enumerate(bf['chan'].dtype.descr) if 'cameraNameInDJ' in field][0]
-        cameras = bf['chan'][0,0][_idx][0,:]
-        for camera, all_frames in zip(cameras, bf['cameraPerTrial'][0]):
-            for trial, frames in enumerate(all_frames[0]):
-                key = {**skey,
-                       'trial': trial + 1,  # Trial all starts from 1
-                       'tracking_device': camera[0]}
-                tracking.Tracking.insert1({**key,
-                                           'tracking_samples': len(frames)},
-                                          allow_direct_insert=True)
-                tracking.Tracking.Frame.insert1({**key,
-                                                  'frame_time': frames.flatten()},
-                                                 allow_direct_insert=True)
+    # if 'cameraPerTrial' in bf:
+    #     log.info('       loading camera frames from NIDQ ...')
+    #
+    #     _idx = [_idx for _idx, field in enumerate(bf['chan'].dtype.descr) if 'cameraNameInDJ' in field][0]
+    #     cameras = bf['chan'][0,0][_idx][0,:]
+    #     for camera, all_frames in zip(cameras, bf['cameraPerTrial'][0]):
+    #         for trial, frames in enumerate(all_frames[0]):
+    #             key = {**skey,
+    #                    'trial': trial + 1,  # Trial all starts from 1
+    #                    'tracking_device': camera[0]}
+    #             tracking.Tracking.insert1({**key,
+    #                                        'tracking_samples': len(frames)},
+    #                                       allow_direct_insert=True)
+    #             tracking.Tracking.Frame.insert1({**key,
+    #                                               'frame_time': frames.flatten()},
+    #                                              allow_direct_insert=True)
     log.info('.... insert_ephys_events() Done! ...')
 
 
