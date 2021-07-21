@@ -70,7 +70,7 @@ class EphysIngest(dj.Imported):
     # key_source = experiment.Session - ephys.ProbeInsertion
     # key_source = experiment.Session & (experiment.TrialNote() & 'trial_note_type = "bitcode"') - ephys.ProbeInsertion
     # key_source = experiment.Session & ephys.Unit   # Reingest ephys
-    key_source = experiment.Session & ephys.Unit & 'session>50'  # Reingest ephys
+    key_source = experiment.Session & ephys.Unit # Reingest ephys
     
     def populate(self, *args, **kwargs):
         # 'populate' which won't require upstream tables
@@ -484,6 +484,7 @@ def do_ephys_ingest(session_key, replace=False, probe_insertion_exists=False, in
     def do_insert():
         # do the insertion per probe for all probes
         for probe_no, (f, cluster_method, npx_meta) in clustering_files.items():
+            if probe_no > 1: continue
             insertion_key = {'subject_id': sinfo['subject_id'], 'session': sinfo['session'], 'insertion_number': probe_no}
             if probe_insertion_exists and (ephys.Unit & insertion_key):
                 # if probe_insertion exists and there exists also units for this insertion_key, skip over it
@@ -1098,35 +1099,35 @@ def insert_ephys_events(skey, bf):
     # <--> ephys.TrialEventType: 'bitcodestart', 'go', 'choice', 'choice', 'reward', 'trialend', 'bpodstart', 'zaberinposition'
     log.info('.... insert_ephys_events() ...')
     log.info('       loading ephys events from NIDQ ...')
-    # df = pd.DataFrame()
-    # headings = bf['headings'][0]
-    # digMarkerPerTrial = bf['digMarkerPerTrial']
-    #
-    # for col, event_type in enumerate(headings):
-    #     times = digMarkerPerTrial[:, col]
-    #     not_nan = np.where(~np.isnan(times))[0]
-    #     trials = not_nan + 1   # Trial all starts from 1
-    #     df = df.append(pd.DataFrame({**skey,
-    #                        'trial': trials,
-    #                        'trial_event_id': col,
-    #                        'trial_event_type': event_type[0],
-    #                        'trial_event_time': times[not_nan]}
-    #                                 )
-    #                    )
-    #
-    # # --- Zaber pulses (only available from ephys NIDQ) ---
-    # if 'zaberPerTrial' in bf:
-    #     for trial, pulses in enumerate(bf['zaberPerTrial'][0]):
-    #         df = df.append(pd.DataFrame({**skey,
-    #                            'trial': trial + 1,   # Trial all starts from 1
-    #                            'trial_event_id': np.arange(len(pulses)) + len(headings),
-    #                            'trial_event_type': 'zaberstep',
-    #                            'trial_event_time': pulses.flatten()}
-    #                                     )
-    #                        )
+    df = pd.DataFrame()
+    headings = bf['headings'][0]
+    digMarkerPerTrial = bf['digMarkerPerTrial']
+
+    for col, event_type in enumerate(headings):
+        times = digMarkerPerTrial[:, col]
+        not_nan = np.where(~np.isnan(times))[0]
+        trials = not_nan + 1   # Trial all starts from 1
+        df = df.append(pd.DataFrame({**skey,
+                           'trial': trials,
+                           'trial_event_id': col,
+                           'trial_event_type': event_type[0],
+                           'trial_event_time': times[not_nan]}
+                                    )
+                       )
+
+    # --- Zaber pulses (only available from ephys NIDQ) ---
+    if 'zaberPerTrial' in bf:
+        for trial, pulses in enumerate(bf['zaberPerTrial'][0]):
+            df = df.append(pd.DataFrame({**skey,
+                               'trial': trial + 1,   # Trial all starts from 1
+                               'trial_event_id': np.arange(len(pulses)) + len(headings),
+                               'trial_event_type': 'zaberstep',
+                               'trial_event_time': pulses.flatten()}
+                                        )
+                           )
 
     # --- Do batch insertion --
-    # ephys.TrialEvent.insert(df, allow_direct_insert=True)
+    ephys.TrialEvent.insert(df, allow_direct_insert=True)
 
     # --- Licks from NI --
     df_action = pd.DataFrame()
