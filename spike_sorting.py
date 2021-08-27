@@ -9,7 +9,7 @@ from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, roc_curve, roc_auc_score
+from sklearn.metrics import accuracy_score, roc_curve, roc_auc_score, balanced_accuracy_score
 from sklearn.neural_network import MLPClassifier
 
 import numpy as np
@@ -142,44 +142,50 @@ def false_neg_and_pos(clf, x, y):
 
 
 def do_train(X, Y, areas, area_name='ALM', clf_name='Linear SVC', if_plot=False):
-    
+
     X = X[areas == area_name]
     Y = Y[areas == area_name]
 
     # Cross validation
     clf = classifiers[clf_name]
-    
-    pred_accuracy = check_scoring(clf, scoring=None)
-    false_negative_rate = check_scoring(clf, scoring=lambda clf, X, Y: false_neg_and_pos(clf, X, Y)[0])
-    false_positive_rate = check_scoring(clf, scoring=lambda clf, X, Y: false_neg_and_pos(clf, X, Y)[1])
-    scoring={'accuracy': pred_accuracy, 
-            'false_pos': false_positive_rate,
-            'false_neg': false_negative_rate}
-    
+
+    false_negative_rate = check_scoring(
+        clf, scoring=lambda clf, X, Y: false_neg_and_pos(clf, X, Y)[0])
+    false_positive_rate = check_scoring(
+        clf, scoring=lambda clf, X, Y: false_neg_and_pos(clf, X, Y)[1])
+    scoring = {'accuracy': 'accuracy',
+               'false_pos': false_positive_rate,
+               'false_neg': false_negative_rate,
+               'balanced_accuracy': 'balanced_accuracy',
+               }
+
     cv_results = cross_validate(clf, X, Y, cv=10,
                                 scoring=scoring
                                 )
-    
+
     # scores_cv = cross_val_score(clf, X, Y, cv=10)
     accuracy_cv = cv_results['test_accuracy']
     false_negative_cv = cv_results['test_false_neg']
     false_positive_cv = cv_results['test_false_pos']
-        
+    balanced_accuracy_cv = cv_results['test_balanced_accuracy']
+
     # All data
     clf.fit(X, Y)
     accuracy_all = clf.score(X, Y)
     false_neg_all, false_pos_all = false_neg_and_pos(clf, X, Y)
-    
+
     # Save results
-    score_cv = {'accuracy': accuracy_cv, 'false_neg': false_negative_cv, 'false_pos': false_positive_cv}
-    score_all = {'accuracy': accuracy_all, 'false_neg': false_neg_all, 'false_pos': false_pos_all}
+    score_cv = {'accuracy': accuracy_cv, 'false_neg': false_negative_cv,
+                'false_pos': false_positive_cv, 'balanced_accuracy': balanced_accuracy_cv}
+    score_all = {'accuracy': accuracy_all, 'false_neg': false_neg_all,
+                 'false_pos': false_pos_all, 'balanced_accuracy': balanced_accuracy_cv}
 
     # print(scores_cv)
     print(f'{area_name:>10} @ {clf_name:<20}: ACC {accuracy_cv.mean()*100:4.1f}+/-{accuracy_cv.std()*100:4.1f}%, '
           f'FALSE- {false_negative_cv.mean()*100:4.1f}+/-{false_negative_cv.std()*100:4.1f}%, '
           f'FALSE+ {false_positive_cv.mean()*100:4.1f}+/-{false_positive_cv.std()*100:4.1f}% '
           f'(all ACC {accuracy_all * 100:4.1f}%, F- {false_neg_all * 100:4.1f}%, F+ {false_pos_all * 100:4.1f}%)')
-    
+
     try:
         coef = clf.coefs_ if 'MLP' in clf_name else clf.coef_
     except:
@@ -188,12 +194,12 @@ def do_train(X, Y, areas, area_name='ALM', clf_name='Linear SVC', if_plot=False)
     if if_plot:
         if any([name in clf_name for name in ['MLP', 'Random_forest']]):
             plot_hist_roc(clf.predict_proba(X)[:, 1], Y,
-                        score_label='SU probability (SVM)', range=[0, 1])
+                          score_label='SU probability (SVM)', range=[0, 1])
         else:
             plot_hist_roc(clf.decision_function(X), Y,
-                        score_label='Decision function', range=[-20, 5])
+                          score_label='Decision function', range=[-20, 5])
             plot_hist_roc(clf.predict_proba(X)[:, 1], Y,
-                        score_label='SU probability (SVM)', range=[0, 1])
+                          score_label='SU probability (SVM)', range=[0, 1])
 
     return coef, score_cv, score_all, clf
 
@@ -258,75 +264,80 @@ def do_tsne(X_scaled, Y, X, areas):
 
 
 def do_train_all(X_scaled, Y, areas):
-    
-    scores = ['accuracy', 'false_pos', 'false_neg']
-    
+
+    scores = ['accuracy', 'false_pos', 'false_neg', 'balanced_accuracy']
+
     cols = pd.MultiIndex.from_product([areas.unique(), classifiers.keys()])
     scores_cv_all = {score: pd.DataFrame(columns=cols) for score in scores}
     clf_all = dict()
     sorters = df_flatten.sorter
-    
+
     for clf_name in classifiers.keys():
         fig = plt.figure(figsize=(15, 10), dpi=300)
         fig.suptitle(clf_name)
         for j, area in enumerate(areas.unique()):
             clf_all[area] = dict()
-    
+
             coef, scores_cv, score_all, clf = do_train(X_scaled, Y, areas,
-                                                         area_name=area,
-                                                         clf_name=clf_name,
-                                                         if_plot=False
-                                                         )
-            
+                                                       area_name=area,
+                                                       clf_name=clf_name,
+                                                       if_plot=False
+                                                       )
+
             for score in scores:
-                scores_cv_all[score].loc[:, (area, clf_name)] = scores_cv[score]
-            
-            clf_all[area][clf_name] = dict(clf=clf, score_all=score_all, coef=coef)
-            
+                scores_cv_all[score].loc[:,
+                                         (area, clf_name)] = scores_cv[score]
+
+            clf_all[area][clf_name] = dict(
+                clf=clf, score_all=score_all, coef=coef)
+
             # Plot Venn here
             for i, sorter in enumerate(sorters[areas == area].unique()):
-                ax = fig.add_subplot(2, len(areas.unique()), 1 + j + i * len(areas.unique()))
-                
+                ax = fig.add_subplot(2, len(areas.unique()),
+                                     1 + j + i * len(areas.unique()))
+
                 # Do prediction
                 this = (areas == area) & (sorters == sorter)
                 xx = X_scaled[this]
                 yy = df_flatten.label[this]
                 yy_predict = clf.predict(xx)
-                            
+
                 # Do Venn
                 g = venn2([set(np.where(yy)[0]), set(np.where(yy_predict)[0])], set_labels=(sorter[4:], '   fitted'),
                           ax=ax, alpha=0.7)
                 ax.set_title(f'{area}, n = {sum(this)}')
-            
+
     return scores_cv_all, clf_all
 
 
 def plot_cv_results(scores_cv_all):
-    
-    scores = ['accuracy', 'false_pos', 'false_neg']
-    ylims = [(0.7, 1.1), (0, 1), (0, 1)]
-    
+
+    scores = ['accuracy', 'false_pos', 'false_neg', 'balanced_accuracy']
+    ylims = [(0.5, 1.1), (0, 1), (0, 1), (0.5, 1.1)]
+
     for score, ylim in zip(scores, ylims):
         plt.figure(figsize=(15, 10))
-        data = scores_cv_all[score].melt(var_name=['Areas','Classfiers'], value_name='10-fold CV')
-        ax = sns.boxplot(x='Areas', y='10-fold CV', hue='Classfiers', data=data, showfliers=True)
+        data = scores_cv_all[score].melt(
+            var_name=['Areas', 'Classfiers'], value_name='10-fold CV')
+        ax = sns.boxplot(x='Areas', y='10-fold CV',
+                         hue='Classfiers', data=data, showfliers=True)
         # sns.stripplot(x='Areas', y='10-fold CV', hue='Classfiers', data=data,
         #                    dodge=True, jitter=True, color='k', alpha=0.7)
-        
-        ax.set_title(score)        
+
+        ax.set_title(score)
         ax.axhline(y=1, ls='--', c='k')
-        ax.legend(bbox_to_anchor=(1,1))
+        ax.legend(bbox_to_anchor=(1, 1))
         ax.set_ylim(ylim)
-    
+
 
 def plot_venns(clf_all, clf_name='SVC_Linear'):
-    #%% All venns for one classifier
+    # %% All venns for one classifier
     areas = df_flatten.brain_area
     sorters = df_flatten.sorter
-    
+
     for area in areas.unique():
         clf = clf_all[area][clf_name]['clf']
-        
+
         _, axs = plt.subplots(1, len(sorters[areas == area].unique()))
         axs = np.atleast_1d(axs)
         for ax, sorter in zip(axs, sorters[areas == area].unique()):
@@ -335,78 +346,122 @@ def plot_venns(clf_all, clf_name='SVC_Linear'):
             xx = X_scaled[this]
             yy = df_flatten.label[this]
             yy_predict = clf.predict(xx)
-                        
+
             # Do Venn
-            g = venn2([set(np.where(yy)[0]), set(np.where(yy_predict)[0])], 
+            g = venn2([set(np.where(yy)[0]), set(np.where(yy_predict)[0])],
                       ax=ax, set_labels=(sorter, clf_name), alpha=0.8, set_colors=('b', 'g'))
             plt.gcf().suptitle(f'{area}, n = {sum(this)}')
-    
+
 
 # =================================================================================================
 # Define classfiers
 C = 10
 classifiers = {
     'Logistic_L1': LogisticRegression(C=C, penalty='l1',
-                                        solver='saga',
-                                        multi_class='multinomial',
-                                        max_iter=10000,
-                                        verbose=False),
-    
+                                      solver='saga',
+                                      multi_class='multinomial',
+                                      max_iter=10000,
+                                      verbose=False),
+
+    'Logistic_L1_bal': LogisticRegression(C=C, penalty='l1',
+                                          solver='saga',
+                                          multi_class='multinomial',
+                                          max_iter=10000,
+                                          verbose=False,
+                                          class_weight="balanced"),
+
     'Logistic_L2': LogisticRegression(C=C, penalty='l2',
-                                                    solver='saga',
-                                                    multi_class='multinomial',
-                                                    max_iter=10000,
-                                                    verbose=False),
-    
+                                      solver='saga',
+                                      multi_class='multinomial',
+                                      max_iter=10000,
+                                      verbose=False),
+
+    'Logistic_L2_bal': LogisticRegression(C=C, penalty='l2',
+                                          solver='saga',
+                                          multi_class='multinomial',
+                                          max_iter=10000,
+                                          verbose=False,
+                                          class_weight="balanced"),
+
     # 'L2 logistic (OvR)': LogisticRegression(C=C, penalty='l2',
     #                                         solver='saga',
     #                                         multi_class='ovr',
     #                                         max_iter=10000,
     #                                         verbose=False),
-    
+
     'SVC_Linear': SVC(kernel='linear', C=C, probability=True,
-                        random_state=0, verbose=False),
-    
+                      random_state=0, verbose=False),
+
+    'SVC_Linear_bal': SVC(kernel='linear', C=C, probability=True,
+                          random_state=0, verbose=False,
+                          class_weight="balanced"),
+
     'SVC_RBF': SVC(kernel='rbf', C=C, probability=True,
-                        random_state=0, verbose=False),
-    
+                   random_state=0, verbose=False),
+
+    'SVC_RBF_bal': SVC(kernel='rbf', C=C, probability=True,
+                       random_state=0, verbose=False,
+                       class_weight="balanced",),
+
     'MLP_ReLU_20': MLPClassifier(hidden_layer_sizes=[20],
-                            activation='relu',
-                            #  solver='sgd',
-                            early_stopping=False,
-                            max_iter=5000,
-                            verbose=0),
+                                 activation='relu',
+                                 #  solver='sgd',
+                                 early_stopping=False,
+                                 max_iter=5000,
+                                 verbose=0),
 
     'MLP_ReLU_20_20': MLPClassifier(hidden_layer_sizes=[20, 20],
-                            activation='relu',
-                            #  solver='sgd',
-                            early_stopping=False,
-                            max_iter=5000,
-                            verbose=0),
-    
-    'Random_forest': RandomForestClassifier(
-                                            n_estimators=10,
-                                            max_depth=None, 
-                                            min_samples_split=2, 
+                                    activation='relu',
+                                    #  solver='sgd',
+                                    early_stopping=False,
+                                    max_iter=5000,
+                                    verbose=0),
+
+    'Random_forest': RandomForestClassifier(n_estimators=100,
+                                            max_depth=None,
+                                            min_samples_split=2,
                                             min_samples_leaf=5,
+                                            oob_score=True,
                                             max_features=None,
                                             n_jobs=-1,
                                             random_state=0
-                                            )
-    # 'GPC': GaussianProcessClassifier(kernel)
+                                            ),
+
+    'Random_forest_bal': RandomForestClassifier(n_estimators=100,
+                                                max_depth=None,
+                                                min_samples_split=2,
+                                                min_samples_leaf=5,
+                                                class_weight="balanced",
+                                                oob_score=True,
+                                                max_features=None,
+                                                n_jobs=-1,
+                                                random_state=0
+                                                ),
+
+    # 'Random_forest_bal_sub': RandomForestClassifier(
+    #                                     n_estimators=100,
+    #                                     max_depth=None,
+    #                                     min_samples_split=2,
+    #                                     min_samples_leaf=5,
+    #                                     class_weight="balanced_subsample",
+    #                                     oob_score=True,
+    #                                     max_features=None,
+    #                                     n_jobs=-1,
+    #                                     random_state=0
+    #                                     )    # 'GPC': GaussianProcessClassifier(kernel)
 }
 
 # classifiers = {
 #     # f'Random_forest_{para}': RandomForestClassifier(
 #     #                                         n_estimators=10,
-#     #                                         max_depth=None, 
-#     #                                         min_samples_split=2, 
+#     #                                         max_depth=None,
+#     #                                         min_samples_split=2,
 #     #                                         min_samples_leaf=5,
 #     #                                         max_features=None,
 #     #                                         n_jobs=-1,
 #     #                                         random_state=0)
 #     # for para in range(1, 9, 1)
-    
+
 #     f'SVC_RBF_{para}': SVC(kernel='rbf', C=para, probability=True,
 #                         random_state=0, verbose=False)
 #     for para in [0.1, 1, 5, 10, 20, 40, 50, 100, 200, 1000]
@@ -421,13 +476,13 @@ unique_areas = areas.unique()
 # ['Medulla', 'ALM', 'Thalamus', 'Midbrain', 'Striatum']
 area = 'Medulla'
 clf_name = 'Random_forest'
-coef, scores_cv, score_all, clf = do_train(X_scaled, Y, areas,                                             
-                                             area_name=area,
-                                             clf_name=clf_name,
-                                             if_plot=True,
-                                             )
+coef, scores_cv, score_all, clf = do_train(X_scaled, Y, areas,
+                                           area_name=area,
+                                           clf_name=clf_name,
+                                           if_plot=True,
+                                           )
 
-#%% Do all
+# %% Do all
 scores_cv_all, clf_all = do_train_all(X_scaled, Y, areas)
 # save to hardisk
 # np.savez('export/clf_all.npz', clf_all=clf_all)
@@ -448,6 +503,5 @@ print(np.vstack([X.columns, coef]).T)
 aoi = areas != 'ALefefM'
 do_tsne(X_scaled[aoi],
         Y[aoi],
-        X[aoi], 
+        X[aoi],
         areas[aoi])
-
