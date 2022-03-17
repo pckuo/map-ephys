@@ -560,6 +560,8 @@ class BehaviorBpodIngest(dj.Imported):
                     setupname = 'Training-Tower-3'
                 elif session.setup_name.lower() in ['tower-1']:
                     setupname = 'Training-Tower-1'
+                elif session.setup_name.lower() in ['tower-4']:
+                    setupname = 'Training-Tower-4'
                 elif session.setup_name.lower() in ['ephys_han']:
                     setupname = 'Ephys-Han'
                 else:
