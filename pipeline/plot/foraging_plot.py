@@ -482,12 +482,14 @@ def plot_training_summary(use_days_from_start=False):
     # highlight = {('FOR01', 'FOR02', 'FOR03', 'FOR04'): dict(color='b'),
     #              ('FOR11', 'FOR12'): dict(color='g'),
     #              }
-    # highlight = {('FOR01', 'FOR02', 'FOR03', 'FOR04'): dict(color='r'),
-    #               ('HH01', 'HH04', 'HH06', 'HH07'): dict(color='b'),
-    #               }
-    highlight = {('HH09'): dict(marker='o'),
-                #   ('HH12', 'HH13'): dict(marker='o')
+    highlight = {('FOR01', 'FOR02', 'FOR03', 'FOR04', 'FOR05', 'FOR06', 'FOR07', 'FOR08', 'FOR09', 'FOR10',
+                  'FOR11', 'FOR12', 'FOR13', 'FOR14', 'FOR15'): dict(color='grey'),
+                  ('HH18', 'HH17', 'HH16', 'HH15', 'HH14', 'HH13', 'HH12', 'HH11', 
+                   'HH10', 'HH09', 'HH08', 'HH07', 'HH06', 'HH05', 'HH04'): dict(color='b'),
                   }
+    # highlight = {('HH18'): dict(marker='o'),
+    #             #   ('HH12', 'HH13'): dict(marker='o')
+    #               }
     
     fig1 = plt.figure(figsize=(20,12))
     ax = fig1.subplots(2,3)
@@ -502,6 +504,15 @@ def plot_training_summary(use_days_from_start=False):
     fig3.subplots_adjust(hspace=0.5, wspace=0.3)
 
     # Only mice who started with 2lp task
+    all_foraging_eff = dict()
+    all_foraging_eff_random_seed = dict()
+    all_trial_num = dict()
+    
+    for h_wr in highlight:
+        all_foraging_eff[h_wr] = []
+        all_foraging_eff_random_seed[h_wr] = []
+        all_trial_num[h_wr] = []
+    
     for wr_name in all_wr:
         if wr_name in exclude:
             continue
@@ -556,6 +567,9 @@ def plot_training_summary(use_days_from_start=False):
         for h_wr in highlight:
             if wr_name in h_wr:
                 plot_setting = {**highlight[h_wr], 'label': wr_name}
+                all_foraging_eff[h_wr].append(foraging_eff)
+                all_foraging_eff_random_seed[h_wr].append(foraging_eff_random_seed)
+                all_trial_num[h_wr].append(total_trial_num)
         
         if plot_setting is None:
             plot_setting = dict(lw=0.5, color='grey')
@@ -586,7 +600,7 @@ def plot_training_summary(use_days_from_start=False):
         ax3[0,1].plot(x, double_dip_hit, **plot_setting)
         ax3[1,0].plot(x, double_dip_miss, **plot_setting)
         ax3[1,1].plot(double_dip_hit, double_dip_miss, **plot_setting)
-                
+        
     x_name = 'Days from start' if use_days_from_start else 'Session number'
         
     ax[0,0].set(xlabel=x_name, title='Total finished trials')
@@ -645,6 +659,40 @@ def plot_training_summary(use_days_from_start=False):
     ax2[0,1].legend(fontsize=15)
     ax2[0,1].set(xlabel='Matching slope', ylabel='Foraging efficiency (optimal) %', xlim=(0,1), ylim=(50,110))
 
+
+    # Average training traces
+    fig4 = plt.figure(figsize=(10, 4))
+    ax4 = fig4.subplots(1,3)    
+    
+    for h_wr in highlight:
+        # Pack data
+        this_h_all_eff = np.ones((np.max([len(ps) for ps in all_foraging_eff[h_wr]]), 
+                                len(all_foraging_eff[h_wr]))) * np.nan
+        this_h_all_eff_random_seed = this_h_all_eff.copy()
+        this_h_all_trial_num = this_h_all_eff.copy()
+        
+        for i, this in enumerate(all_foraging_eff[h_wr]):
+            this_h_all_eff[:len(this), i] = this
+            
+        for i, this in enumerate(all_foraging_eff_random_seed[h_wr]):
+            this_h_all_eff_random_seed[:len(this), i] = this
+ 
+        for i, this in enumerate(all_trial_num[h_wr]):
+            this_h_all_trial_num[:len(this), i] = this
+            
+        # nanmean and std
+        this_h_mean = np.nanmean(this_h_all_eff, axis=1)
+        this_h_sem = np.nanstd(this_h_all_eff, axis=1) / np.sqrt(this_h_all_eff.shape[1])
+        this_h_random_seed_mean = np.nanmean(this_h_all_eff_random_seed, axis=1)
+        this_h_random_seed_sem = np.nanstd(this_h_all_eff_random_seed, axis=1) / np.sqrt(this_h_all_eff_random_seed.shape[1])
+        this_h_trial_num_mean = np.nanmean(this_h_all_trial_num, axis=1)
+        this_h_trial_num_sem = np.nanstd(this_h_all_trial_num, axis=1) / np.sqrt(this_h_all_trial_num.shape[1])
+        
+        # plot
+        ax4[0].errorbar(np.r_[0:len(this_h_mean)] + 1, y=this_h_mean, yerr=this_h_sem, **highlight[h_wr])
+        ax4[1].errorbar(np.r_[0:len(this_h_random_seed_mean)] + 1, y=this_h_random_seed_mean, yerr=this_h_random_seed_sem, **highlight[h_wr])
+        ax4[2].errorbar(np.r_[0:len(this_h_trial_num_mean)] + 1, y=this_h_trial_num_mean, yerr=this_h_trial_num_sem, **highlight[h_wr])
+        
 
     #%%
     
