@@ -777,6 +777,7 @@ class UnitLevelForagingEphysReport(dj.Computed):
     ---
     unit_foraging_tuning: filepath@report_store  # unit tuning plot for a particular time period
     unit_foraging_mlr: filepath@report_store  # multivariate linear regression result for a particular unit
+    unit_foraging_psth: filepath@report_store # psth plots for a particular unit
     """
 
     key_source = ephys.Unit & foraging_model.FittedSessionModel
@@ -791,9 +792,40 @@ class UnitLevelForagingEphysReport(dj.Computed):
 
         fig1, fig2 = unit_psth.plot_unit_period_tuning(unit_key=key)
 
+        fig3 = plt.figure(constrained_layout=True, figsize=(25, 25))
+
+        best_model = (foraging_model.FittedSessionModelComparison.BestModel & key
+                      & 'model_comparison_idx=1').fetch1('best_aic')
+        align_types = ['trial_start', 'go_cue', 'first_lick_after_go_cue',
+                       'iti_start', 'next_trial_start']
+        latent_variables = ['contra_action_value', 'ipsi_action_value',
+                            'relative_action_value_ic', 'total_action_value']
+
+        gs = GridSpec(6, 25, right=5, hspace=0.4)
+
+        unit_psth.plot_unit_psth_choice_outcome(
+            unit_key=key, axs=np.array([fig3.add_subplot(gs[row_idx, col_idx])
+                                        for row_idx, col_idx in itertools.product(range(2), range(5))]).reshape(2, 5))
+
+        for row_idx, latent_variable in zip(range(2, 6), latent_variables):
+            axes = np.array([fig3.add_subplot(gs[row_idx, col_idx])
+                             for row_idx, col_idx in itertools.product(range(row_idx, row_idx + 1), range(5))])
+            unit_psth.plot_unit_psth_latent_variable_quantile(
+                unit_key=key, axs=axes.reshape(1, 5),
+                model_id=best_model, align_types=align_types, latent_variable=latent_variable)
+            axes[0].set_ylabel(f'Grouped by\n{latent_variable}')
+
+        unit_info = (f'{water_res_num}, {sess_date}, imec {key["insertion_number"] - 1}\n'
+                     f'Unit #: {key["unit"]}, '
+                     f'{(((ephys.Unit & key) * histology.ElectrodeCCFPosition.ElectrodePosition) * ccf.CCFAnnotation).fetch1("annotation")} \n')
+        fig3.text(0.5, 9, unit_info)
+
         # ---- Save fig and insert ----
         fn_prefix = f'{water_res_num}_{sess_date}_{key["insertion_number"]}_{key["clustering_method"]}_u{key["unit"]:03}_'
-        fig_dict = save_figs((fig1, fig2), ('unit_foraging_tuning', 'unit_foraging_mlr'), units_dir, fn_prefix)
+        fig_dict = save_figs(
+            (fig1, fig2, fig3),
+            ('unit_foraging_tuning', 'unit_foraging_mlr', 'unit_foraging_psth'),
+            units_dir, fn_prefix)
  
         plt.close('all')
         self.insert1({**key, **fig_dict})
