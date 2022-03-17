@@ -534,8 +534,12 @@ class UnitPeriodLinearFit(dj.Computed):
         # -- Fit --
         y = pd.DataFrame({f'{period} firing': firing})
         x = all_iv[independent_variables].astype(float)
-        model = sm.OLS(y, sm.add_constant(x) if if_intercept else x)
-        model_fit = model.fit()
+        try:
+            model = sm.OLS(y, sm.add_constant(x) if if_intercept else x)
+            model_fit = model.fit()
+        except:
+            print(f'Wrong: {key}')
+            return
 
         # -- Insert --
         self.insert1({**key,
