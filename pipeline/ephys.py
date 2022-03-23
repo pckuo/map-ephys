@@ -221,7 +221,7 @@ class TrialEvent(dj.Imported):
     """
     definition = """
     -> experiment.BehaviorTrial
-    trial_event_id: smallint
+    trial_event_id: int
     ---
     -> experiment.TrialEventType
     trial_event_time : Decimal(10, 5)  # (s) from session start (global time)

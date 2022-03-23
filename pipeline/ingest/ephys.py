@@ -1123,6 +1123,8 @@ def insert_ephys_events(skey, bf, trial_trunc=None):
     all times are session-based
     '''
 
+    max_id_this_trial = 0
+    
     # --- Events available both from behavior .csv file (trial time) and ephys NIDQ (session time) ---
     # digMarkerPerTrial from bitcode.mat: [STRIG_, GOCUE_, CHOICEL_, CHOICER_, REWARD_, ITI_, BPOD_START_, ZABER_IN_POS_]
     # <--> ephys.TrialEventType: 'bitcodestart', 'go', 'choice', 'choice', 'reward', 'trialend', 'bpodstart', 'zaberinposition'
@@ -1145,18 +1147,36 @@ def insert_ephys_events(skey, bf, trial_trunc=None):
                            'trial_event_time': times[not_nan]}
                                     )
                        )
+    
+    max_id_this_trial += len(headings)
 
     # --- Zaber pulses (only available from ephys NIDQ) ---
     if 'zaberPerTrial' in bf:
         for trial, pulses in enumerate(bf['zaberPerTrial'][0][:trial_trunc]):
             df = df.append(pd.DataFrame({**skey,
                                'trial': trial + 1,   # Trial all starts from 1
-                               'trial_event_id': np.arange(len(pulses)) + len(headings),
+                               'trial_event_id': np.arange(len(pulses)) + max_id_this_trial,
                                'trial_event_type': 'zaberstep',
                                'trial_event_time': pulses.flatten()}
                                         )
                            )
+            max_id_this_trial += len(pulses)
 
+    # --- Laser pulses ---
+    # digitalized laser pulses (laser channel > 0.02 V) from NIDAQ; not amp information
+    # TODO: get amp info from (1) bpod csv file, and/or (2) raw laser track in NIDAQ
+    for side in ['L', 'R']:
+        if f'laser{side}PerTrial' in bf:
+            for trial, pulses in enumerate(bf[f'laser{side}PerTrial'][0][:trial_trunc]):
+                df = df.append(pd.DataFrame({**skey,
+                                'trial': trial + 1,   # Trial all starts from 1
+                                'trial_event_id': np.arange(len(pulses)) + max_id_this_trial,
+                                'trial_event_type': f'laser{side}',
+                                'trial_event_time': pulses.flatten()}
+                                            )
+                            )
+                max_id_this_trial += len(pulses)
+            
     # --- Do batch insertion --
     ephys.TrialEvent.insert(df, allow_direct_insert=True)
 

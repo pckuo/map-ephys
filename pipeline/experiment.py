@@ -288,7 +288,7 @@ class TrialEventType(dj.Lookup):
     """
     contents = zip(('delay', 'go', 'sample', 'presample', 'trialend',
                     'videostart', 'videoend', 'bitcodestart', 'choice', 'reward', 'doubledip',   # Added for foraging
-                    'bpodstart', 'zaberstep', 'zaberready'    # Events only available from NIDQ channels
+                    'bpodstart', 'zaberstep', 'zaberready', 'laserL', 'laserR'    # Events only available from NIDQ channels
                     ))
 
 
