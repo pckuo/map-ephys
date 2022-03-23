@@ -10,7 +10,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from datetime import datetime
-from pipeline import lab, experiment, tracking, ephys, histology, psth, ccf
+from pipeline import lab, experiment, tracking, ephys, histology, psth, psth_foraging, ccf
 from pipeline.util import _get_clustering_method
 from pipeline.report import get_wr_sessdate
 
@@ -499,6 +499,47 @@ def write_to_activity_viewer(insert_keys, output_dir='./'):
         unit_id, ccf_x, ccf_y, ccf_z, unit_amp, unit_snr, avg_firing_rate, isi_violation, waveform, unit_psth = q_unit.fetch(
             'unit', 'ccf_x', 'ccf_y', 'ccf_z', 'unit_amp', 'unit_snr', 'avg_firing_rate',
             'isi_violation', 'waveform', 'unit_psth', order_by='unit')
+
+        unit_stats = ["unit_amp", "unit_snr", "avg_firing_rate", "isi_violation"]
+        timeseries = ["unit_psth"]
+        waveform = np.stack(waveform)
+        spike_rates = np.array([d[0] for d in unit_psth])
+        edges = unit_psth[0][1] if unit_psth[0][1].shape == unit_psth[0][0].shape else unit_psth[0][1][1:]
+        unit_psth = np.vstack((edges, spike_rates))
+        ccf_coord = np.transpose(np.vstack((ccf_z, ccf_y, 11400 - ccf_x)))
+
+        filepath = pathlib.Path(output_dir) / uid
+
+        np.savez(filepath, probe_insertion=uid, unit_id=unit_id, ccf_coord=ccf_coord, waveform=waveform,
+                 timeseries=timeseries, unit_stats=unit_stats, unit_amp=unit_amp, unit_snr=unit_snr,
+                 avg_firing_rate=avg_firing_rate, isi_violation=isi_violation, unit_psth=unit_psth)
+
+
+def write_to_activity_viewer_foraging(insert_keys, output_dir='./'):
+    """
+    :param insert_keys: list of dict, for multiple ProbeInsertion keys
+    :param output_dir: directory to write the npz files
+    """
+
+    if not isinstance(insert_keys, list):
+        insert_keys = [insert_keys]
+
+    for key in insert_keys:
+        water_res_num, sess_datetime = get_wr_sessdate(key)
+
+        uid = f'{water_res_num}_{sess_datetime}_{key["insertion_number"]}'
+
+        if not (ephys.Unit * lab.ElectrodeConfig.Electrode * histology.ElectrodeCCFPosition.ElectrodePosition & key):
+            print('The units in the specified ProbeInsertion do not have CCF data yet')
+            continue
+
+        q_unit = (ephys.UnitStat * ephys.Unit * lab.ElectrodeConfig.Electrode
+                  * histology.ElectrodeCCFPosition.ElectrodePosition * psth.UnitPsth * psth_foraging.UnitPeriodLinearFit * psth_foraging.UnitPeriodLinearFit.Param
+                  & key & 'unit_quality != "all"' & 'trial_condition_name in ("good_noearlylick_hit")')
+
+        unit_id, ccf_x, ccf_y, ccf_z, unit_amp, unit_snr, avg_firing_rate, isi_violation, waveform, unit_psth, beta, p, t = q_unit.fetch(
+            'unit', 'ccf_x', 'ccf_y', 'ccf_z', 'unit_amp', 'unit_snr', 'avg_firing_rate',
+            'isi_violation', 'waveform', 'unit_psth', 'beta', 'p', 't', order_by='unit')
 
         unit_stats = ["unit_amp", "unit_snr", "avg_firing_rate", "isi_violation"]
         timeseries = ["unit_psth"]
