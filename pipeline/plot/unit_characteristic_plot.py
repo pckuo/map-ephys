@@ -17,6 +17,9 @@ from pipeline.plot import unit_psth
 from pipeline.util import (_get_units_hemisphere, _get_trial_event_times,
                            _get_stim_onset_time, _get_clustering_method)
 
+foraging_trials = experiment.BehaviorTrial & 'task LIKE "foraging%"'
+foraging_sess = (experiment.Session & foraging_trials) 
+
 from . import PhotostimError
 
 _plt_xmin = -3
@@ -797,7 +800,7 @@ def plot_paired_coding_direction(unit_g1, unit_g2, labels=None, time_period=None
 def plot_unit_period_fit(linear_model='Q_rel + Q_tot + rpe'):
 #%%
     # linear_model='Q_c + Q_i + rpe'
-    q_unit = ((ephys.Unit * ephys.ClusterMetric * ephys.UnitStat * ephys.MAPClusterMetric.DriftMetric)
+    q_unit = ((ephys.Unit * ephys.ClusterMetric * ephys.UnitStat * ephys.MAPClusterMetric.DriftMetric & foraging_sess)
               & 'presence_ratio > 0.95'
               & 'amplitude_cutoff < 0.1'
               & 'isi_violation < 0.5' 

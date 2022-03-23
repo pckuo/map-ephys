@@ -488,7 +488,9 @@ class UnitPeriodLinearFit(dj.Computed):
     model_p=Null:   float
     """
 
-    key_source = (ephys.Unit & (experiment.BehaviorTrial & 'task LIKE "foraging%"')) * LinearModelPeriodToFit * LinearModelBehaviorModelToFit * LinearModel
+    key_source = ((ephys.Unit & (experiment.BehaviorTrial & 'task LIKE "foraging%"')) * LinearModelPeriodToFit * LinearModelBehaviorModelToFit * LinearModel)\
+        - (ephys.Unit.proj() & {'subject_id': 473361, 'session': 48})
+                          
     class Param(dj.Part):
         definition = """
         -> master
