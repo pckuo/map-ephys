@@ -800,12 +800,15 @@ def plot_paired_coding_direction(unit_g1, unit_g2, labels=None, time_period=None
 def plot_unit_period_fit(linear_model='Q_rel + Q_tot + rpe'):
 #%%
     # linear_model='Q_c + Q_i + rpe'
-    q_unit = ((ephys.Unit * ephys.ClusterMetric * ephys.UnitStat * ephys.MAPClusterMetric.DriftMetric & foraging_sess)
+    print('define queries...')
+    q_unit = (((ephys.Unit & foraging_sess) 
+               * ephys.ClusterMetric * ephys.UnitStat * ephys.MAPClusterMetric.DriftMetric)
+               #* (psth_foraging.UnitPeriodLinearFit * psth_foraging.UnitPeriodLinearFit.Param & {'multi_linear_model': linear_model}))
               & 'presence_ratio > 0.95'
               & 'amplitude_cutoff < 0.1'
               & 'isi_violation < 0.5' 
               & 'unit_amp > 70'
-              # & 'drift_metric < 0.1'
+            #   # & 'drift_metric < 0.1'
               )
 
     q_hist = (q_unit * histology.ElectrodeCCFPosition.ElectrodePosition) * ccf.CCFAnnotation
@@ -817,6 +820,7 @@ def plot_unit_period_fit(linear_model='Q_rel + Q_tot + rpe'):
               * psth_foraging.UnitPeriodLinearFit.Param
               * q_hist)
               & {'multi_linear_model': linear_model})   
+    print('done!')
 
 #%%
     # -- Heatmap ---
@@ -842,14 +846,18 @@ def plot_unit_period_fit(linear_model='Q_rel + Q_tot + rpe'):
 
     # Areas that have most number of neurons
     areas = list(areas.index[:10])
-
+    print('plotting t-distributions')
+        
     for i, lv in enumerate(lvs):
+        print('   lv...')
         for j, ep in enumerate(epochs):
+            print('    ep...')
             ax = axs[i, j]
             ax.axhline(y=0.95, color='k', linestyle=':')
             ax.axvline(x=1.96, color='k', linestyle=':')
 
             for area in areas:
+                print('     area...')
                 this_ts = (q_all & {'var_name': lv, 'period': ep, 'annotation': area}).fetch('t')
                 values, bin = np.histogram(np.abs(this_ts), 100)
                 ax.plot(bin[:-1], np.cumsum(values)/len(this_ts), label=f'{area}, n = {len(this_ts)}')
@@ -876,6 +884,7 @@ def plot_unit_period_fit(linear_model='Q_rel + Q_tot + rpe'):
     else:
         lvs = ['relative_action_value_ic', 'total_action_value']
 
+    print('plotting weights distribution')
     for j, ep in enumerate(['go_to_end', 'iti_all']):
         ax = axs[j]
 
@@ -888,6 +897,7 @@ def plot_unit_period_fit(linear_model='Q_rel + Q_tot + rpe'):
             ax.axvline(x=-2, color='k', ls='--', lw=.5)
             ax.axvline(x=2, color='k', ls='--', lw=.5)
 
+            print(f'    fetch data for {ep}, {area}...')
             df = pd.DataFrame((q_all
                                & {'annotation': area}
                                & {'period': ep}).proj('beta', 'p', 'area_num_units', 't').fetch())
