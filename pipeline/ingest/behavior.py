@@ -17,6 +17,7 @@ import datajoint as dj
 
 from pybpodgui_api.models.project import Project as BPodProject
 from . import InvalidBehaviorTrialError
+from .utils import foraging_bpod
 
 from pipeline import lab, experiment
 from pipeline import get_schema_name, dict_to_hash
@@ -514,7 +515,7 @@ class BehaviorBpodIngest(dj.Imported):
             # ---- Special parsing for csv file ----
             log.info('Load session file(s) ({}/{}): {}'.format(s_idx + 1, len(bpodsess_order),
                                                                csvfilename))
-            df_behavior_session = util.load_and_parse_a_csv_file(csvfilename)
+            df_behavior_session = foraging_bpod.load_and_parse_a_csv_file(csvfilename)
 
             # ---- Integrity check of the current bpodsess file ---
             # It must have at least one 'trial start' and 'trial end'
@@ -718,7 +719,7 @@ class BehaviorBpodIngest(dj.Imported):
                                            'go': ['GoCue'],
                                            'choice': [f'Choice_{lickport}' for lickport in self.water_port_name_mapper.values()],
                                            'reward': [f'Reward_{lickport}' for lickport in self.water_port_name_mapper.values()],
-                                           'doubledip': ['Double_dipped'],   # Only for non-double-dipped trials, ITI = last lick + 1 sec (maybe I should not use double dipping punishment for ehpys?)
+                                           'doubledip': ['Double_dipped'] + [f'Double_dipped_to_{lickport}' for lickport in self.water_port_name_mapper.values()],   # Only for non-double-dipped trials, ITI = last lick + 1 sec (maybe I should not use double dipping punishment for ehpys?)
                                            'trialend': ['ITI'],
                                            'videoend': ['ITIAfterVideoOff'],
                                            }
