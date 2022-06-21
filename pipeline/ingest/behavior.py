@@ -554,16 +554,16 @@ class BehaviorBpodIngest(dj.Imported):
                 session_time = df_behavior_session['PC-TIME'][trial_start_idxs[0]]
                 if session.setup_name.lower() in ['day1', 'tower-2', 'day2-7', 'day_1',
                                                   'real foraging']:
-                    setupname = 'Training-Tower-2'
+                    setupname = 'AIND-Tower-2'   # 'Training-Tower-2'
                 elif session.setup_name.lower() in ['tower-3', 'tower-3beh', ' tower-3', '+',
                                                     'tower 3']:
-                    setupname = 'Training-Tower-3'
+                    setupname = 'AIND-Tower-3'   # 'Training-Tower-3'
                 elif session.setup_name.lower() in ['tower-1']:
-                    setupname = 'Training-Tower-1'
+                    setupname = 'AIND-Tower-1'  #'Training-Tower-1'
                 elif session.setup_name.lower() in ['tower-4']:
                     setupname = 'Training-Tower-4'
                 elif session.setup_name.lower() in ['ephys_han']:
-                    setupname = 'Ephys-Han'
+                    setupname = 'AIND-Ephys-Han'  # 'Ephys-Han'
                 else:
                     log.info('ERROR: unhandled setup name {} (from {}). Skipping...'.format(
                         session.setup_name, session.path))
