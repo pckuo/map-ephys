@@ -313,6 +313,269 @@ class TrackingIngest(dj.Imported):
 
         return res
 
+@schema
+class TrackingIngestForaging(dj.Imported):
+    definition = """
+    -> experiment.Session
+    """
+
+    class TrackingFile(dj.Part):
+        definition = '''
+        -> TrackingIngest
+        -> experiment.SessionTrial
+        -> tracking.TrackingDevice
+        ---
+        tracking_file:          varchar(255)            # tracking file subpath
+        '''
+
+    key_source = experiment.Session & (experiment.BehaviorTrial & 'task LIKE "foraging%"') \
+                & {'subject_id': 473360, 'session': 49}
+
+    camera_position_mapper = {'side': ('side_face', ),  # List of possible mapping from 'tracking_position' to text string of the file names
+                              'bottom': ('bottom_face', ),
+                              'body': ('body', 'side_body')}
+    
+                    
+    fiducial_table_mapper = {
+            'bottom': {
+            # 'fiducial in DLC':   ('prefix of field', {sub attr}) 
+            'nosetip':              ('nose', {}),
+            'tongueTip':            ('tongue', {}),
+            **{'tongue' + pos: ('tongue_side', {'side': pos}) for pos in ['LeftFront', 'RightFront', 'LeftBack', 'RightBack']}, 
+            'jaw':                  ('jaw', {}),
+            'pawL':                 ('left_paw', {}),
+            'pawR':                 ('right_paw', {}),
+            **{'W' + pos: ('whisker', {'whisker_name': pos}) for pos in ['Lup', 'Lmid', 'Lbot', 'Rup', 'Rmid', 'Rbot']}, 
+            },
+            
+            'side': {
+                
+            }
+            }
+
+    
+    def make(self, key, tracking_exists=False):
+        '''
+        TrackingIngest .make() function
+        To rerun the tracking ingestion for an existing session to add new tracking data for new devices:
+            TrackingIngest().make(session_key, tracking_exists=True)
+        '''
+        log.info('\n==================================================================')
+        log.info('TrackingIngest().make(): key: {k}'.format(k=key))
+
+        session = (lab.WaterRestriction.proj('water_restriction_number') * experiment.Session.proj(
+            ..., session_datetime="cast(concat(session_date, ' ', session_time) as datetime)") & key).fetch1()
+
+        h2o = session['water_restriction_number']
+        trials = (experiment.SessionTrial & session).fetch('trial')
+        session_rig = (experiment.Session & key).fetch1('rig')
+
+        log.info('\tgot session: {} - {} trials - {}'.format(session, len(trials), session_rig))
+
+        # camera_restriction = 'tracking_device in ("Camera 0", "Camera 1", "Camera 2")'
+        camera_restriction = 'tracking_device in ("Camera 1")'
+
+
+        tracking_files = []
+        for device in (tracking.TrackingDevice & camera_restriction).fetch(as_dict=True):
+            tdev = device['tracking_device']
+            cam_pos = device['tracking_position']
+
+            if tracking_exists and (tracking.Tracking & key & device):
+                log.info('\nSession tracking exists for: {} ({}). Skipping...'.format(tdev, cam_pos))
+                continue
+
+            log.info('\n-------------------------------------')
+            log.info('\nSearching for session tracking data directory for: {} ({})'.format(tdev, cam_pos))
+
+            for tracking_path in get_tracking_paths():
+                tracking_root_dir = tracking_path[-1]
+                try:
+                    tracking_sess_dir = _get_foraging_sess_tracking_dir(tracking_root_dir, session)
+                except FileNotFoundError as e:
+                    log.warning('{} - skipping'.format(str(e)))
+                    continue
+                else:
+                    break
+            else:
+                log.warning('\tNo tracking directory found for {} ({}) - skipping...'.format(tdev, cam_pos))
+                continue
+
+            cam_trial_mapping_file = None
+            tpos = None
+            
+            # for tpos_candidate in self.camera_position_mapper[cam_pos]:
+            #     camtrial_fn = '_{}.txt'.format(tpos_candidate)
+            #     log.info('Trying camera position trial map: {}'.format(tracking_sess_dir / camtrial_fn))
+            #     if (tracking_sess_dir / camtrial_fn).exists():
+            #         cam_trial_mapping_file = tracking_sess_dir / camtrial_fn
+            #         tpos = tpos_candidate
+            #         log.info('Matched! Using "{}"'.format(tpos))
+            #         break
+
+            csv_file_ending = '-*'  # csv filename containing '-0000' or not
+
+            if cam_trial_mapping_file is None:  # This is always true for foraging task as of now (no dedicated mapping file)
+                log.info('Video-Trial mapper file (.txt) not found - Using one-to-one trial mapping')
+                tmap = {tr - (1 if session_rig == 'RRig-MTL' else 0): tr for tr in trials}  # one-to-one map
+                for tpos_candidate in self.camera_position_mapper[cam_pos]:
+                    camtrial_fn = '{}_[0-9]*{}.csv'.format(tpos_candidate, csv_file_ending)
+                    print('Trying camera position trial map: {}'.format(tracking_sess_dir / camtrial_fn))
+                    if list(tracking_sess_dir.glob(camtrial_fn)):
+                        tpos = tpos_candidate
+                        print('Matched! Using "{}"'.format(tpos))
+                        break
+            else:
+                tmap = self.load_campath(cam_trial_mapping_file)  # file:trial
+
+            if tpos is None:
+                log.warning('No tracking data for camera: {}... skipping'.format(cam_pos))
+                continue
+
+            n_tmap = len(tmap)
+
+            # sanity check
+            assert len(trials) >= n_tmap, '{} tracking trials found but only {} behavior trials available'.format(n_tmap, len(trials))
+
+            log.info('loading tracking data for {} trials'.format(n_tmap))
+
+            i = 0
+            for t in tmap:  # TODO: global matching of ephys and video frame (for now, no tolerance to misalignment)
+                if tmap[t] not in trials:
+                    log.warning('nonexistant trial {}.. skipping'.format(t))
+                    continue
+
+                i += 1
+                
+                # ----- Read tracking from csv files ------
+                # ex: dl59_side_1(-0000).csv
+                tracking_trial_filename = '{}_{}{}.csv'.format(tpos, t, csv_file_ending)
+                tracking_trial_filepath = list(tracking_sess_dir.glob(tracking_trial_filename))
+
+                if not tracking_trial_filepath or len(tracking_trial_filepath) > 1:
+                    log.debug('file mismatch: file: {} trial: {} ({})'.format(
+                        t, tmap[t], tracking_trial_filepath))
+                    continue
+
+                if i % 50 == 0:
+                    log.info('item {}/{}, trial #{} ({:.2f}%)'
+                             .format(i, n_tmap, t, (i/n_tmap)*100))
+                else:
+                    log.debug('item {}/{}, trial #{} ({:.2f}%)'
+                              .format(i, n_tmap, t, (i/n_tmap)*100))
+
+                tracking_trial_filepath = tracking_trial_filepath[-1]
+                try:
+                    trk = self.load_tracking(tracking_trial_filepath)
+                except Exception as e:
+                    log.warning('Error loading .csv: {}\n{}'.format(
+                        tracking_trial_filepath, str(e)))
+                    raise e
+
+                recs = {}
+                rec_base = dict(key, trial=tmap[t], tracking_device=tdev)
+                
+                for k in trk:
+                    if k == 'samples':
+                        frame_count_from_NI = (tracking.Tracking & key & device & {'trial': t}).fetch1('tracking_samples')
+                        frame_count_from_csv = len(trk['samples']['ts'])
+                        assert frame_count_from_NI == frame_count_from_csv, 'Trial {}: {} frames from NI but {} frames from csv!'.format(t, frame_count_from_NI, frame_count_from_csv)
+                    else:
+                        rec = dict(rec_base)
+
+                        for attr in trk[k]:
+                            field_prefix = self.fiducial_table_mapper[cam_pos][k][0] if k in self.fiducial_table_mapper[cam_pos].keys() else k
+                            rec_key = '{}_{}'.format(field_prefix, attr)
+                            rec[rec_key] = np.array(trk[k][attr])
+
+                        recs[k] = rec
+
+                # Already done during ephys ingestion (use feedback frames in NI)
+                # tracking.Tracking.insert1(
+                #     recs['tracking'], allow_direct_insert=True)
+                
+                # ---- Do insertion ----
+                # Simple way of looping over all fiducials
+                for fiducial, (prefix, sub_attr) in self.fiducial_table_mapper[cam_pos].items():
+                    table = tracking.Tracking().tracking_features[prefix]
+                    table.insert1(
+                        {**recs[fiducial], **sub_attr}, allow_direct_insert=True
+                    )
+                    
+                # Special handling of lickport (just average two lickports)
+                if 'LickportLeft' in recs and 'LickportRight' in recs:
+                    # Simply average left and right lickports
+                    lickport_x = (recs['LickportLeft']['LickportLeft_x'] + recs['LickportRight']['LickportRight_x']) / 2
+                    lickport_y = (recs['LickportLeft']['LickportLeft_y'] + recs['LickportRight']['LickportRight_y']) / 2
+                    lickport_likelihood = (recs['LickportLeft']['LickportLeft_likelihood'] + recs['LickportRight']['LickportRight_likelihood']) / 2
+                    tracking.Tracking.LickPortTracking.insert1(
+                        {**rec_base, 'lickport_x': lickport_x, 'lickport_y': lickport_y, 'lickport_likelihood': lickport_likelihood}, allow_direct_insert=True)
+                
+                tracking_files.append({
+                    **key, 'trial': tmap[t], 'tracking_device': tdev,
+                    'tracking_file': tracking_trial_filepath.relative_to(tracking_root_dir).as_posix()})
+
+            log.info('... completed {}/{} items.'.format(i, n_tmap))
+
+        log.info('\n---------------------')
+        if tracking_files:
+            if not tracking_exists:
+                self.insert1(key)
+            self.TrackingFile.insert(tracking_files)
+
+            log.info('Tracking ingestion completed: {k}'.format(k=key))
+
+    @staticmethod
+    def load_campath(campath):
+        ''' load camera position file-to-trial map '''
+        log.debug("load_campath(): {}".format(campath))
+        with open(campath, 'r') as f:
+            return {int(k): int(v) for i in f
+                    for k, v in (i.strip().split('\t'),)}
+
+    def load_tracking(self, trkpath):
+        log.debug('load_tracking() {}'.format(trkpath))
+        '''
+        load actual tracking data.
+
+        example format:
+
+        scorer,DeepCut_resnet50_licking-sideAug10shuffle1_1030000,DeepCut_resnet50_licking-sideAug10shuffle1_1030000,DeepCut_resnet50_licking-sideAug10shuffle1_1030000,DeepCut_resnet50_licking-sideAug10shuffle1_1030000,DeepCut_resnet50_licking-sideAug10shuffle1_1030000,DeepCut_resnet50_licking-sideAug10shuffle1_1030000,DeepCut_resnet50_licking-sideAug10shuffle1_1030000,DeepCut_resnet50_licking-sideAug10shuffle1_1030000,DeepCut_resnet50_licking-sideAug10shuffle1_1030000
+        bodyparts,nose,nose,nose,tongue,tongue,tongue,jaw,jaw,jaw
+        coords,x,y,likelihood,x,y,likelihood,x,y,likelihood
+        0,418.48327827453613,257.231650352478,1.0,426.47182297706604,263.82502603530884,1.796432684386673e-06,226.12365770339966,395.8081398010254,1.0
+
+        results are of the form:
+
+          {'feature': {'attr': [val, ...]}}
+
+        where feature is e.g. 'nose', 'attr' is e.g. 'x'.
+
+        the special 'feature'/'attr' pair "samples"/"ts" is used to store
+        the first column/sample timestamp for each row in the input file.
+        '''
+        res = defaultdict(lambda: defaultdict(list))
+        
+        with open(trkpath, 'r') as f:
+            f.readline()  # discard 1st line
+            parts, fields = f.readline(), f.readline()
+            parts = parts.rstrip().split(',')
+            fields = fields.rstrip().split(',')
+
+            for l in f:
+                if l.strip():
+                    lv = l.rstrip().split(',')
+                    for i, v in enumerate(lv):
+                        v = float(v)
+                        if i == 0:
+                            res['samples']['ts'].append(v)
+                        else:
+                            res[parts[i]][fields[i]].append(v)
+
+        return res
+
+
+
 
 # ======== Helpers for directory navigation ========
 
@@ -399,3 +662,37 @@ def _get_MTL_sess_tracking_dir(tracking_path, session, camera_position):
 
     raise FileNotFoundError(
         'Multi-target-licking tracking data dir ({}) not found'.format(dir.relative_to(tracking_path)))
+
+
+def _get_foraging_sess_tracking_dir(tracking_path, session):
+    """
+    Given the session information and a tracking root data directory,
+    search and return:
+     i) the directory containing the session's tracking data
+     ii) the format of the session directory name
+
+    Directory structure conventions supported:
+    1. tracking_path / h2o / h2o_[Sxx]_yyyymmdd / *.csv(s)
+    
+    """
+    tracking_path = pathlib.Path(tracking_path)
+    h2o = session['water_restriction_number']
+    sess_date = session['session_datetime'].date()
+
+    if (tracking_path / h2o).exists():
+        log.info('Checking for tracking data at: {}'.format(tracking_path / h2o))
+    else:
+        raise FileNotFoundError('{} not found'.format(tracking_path / h2o))
+
+    session_nth = _get_same_day_session_order(session)
+    session_nth_str = '_{}'.format(session_nth) if session_nth > 1 else ''
+
+    sess_dirname_glob = '{}*{}'.format(h2o, sess_date.strftime('%Y%m%d')) + session_nth_str
+    dir = glob(str(tracking_path / h2o / sess_dirname_glob))
+    
+    if len(dir) == 1:
+        dir = pathlib.Path(dir[0])
+        log.info('Found {}'.format(dir.relative_to(tracking_path)))
+        return dir
+    else:
+        raise FileNotFoundError('No or more than one ({}) found'.format(sess_dirname_glob))
