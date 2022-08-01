@@ -3,6 +3,7 @@ import os
 import logging
 import pathlib
 from glob import glob
+import re
 from datetime import datetime
 import uuid
 
@@ -371,12 +372,13 @@ class TrackingIngestForaging(dj.Imported):
         session_rig = (experiment.Session & key).fetch1('rig')
 
         log.info('\tgot session: {} - {} trials - {}'.format(session, len(trials), session_rig))
-
+       
+        # ========== Looping over all cameras ==========
+        # Camera 0: Side; Camera 1: Bottom; Camera 2: Body
         # camera_restriction = 'tracking_device in ("Camera 0", "Camera 1", "Camera 2")'
         camera_restriction = 'tracking_device in ("Camera 1")'
-
-
         tracking_files = []
+        
         for device in (tracking.TrackingDevice & camera_restriction).fetch(as_dict=True):
             tdev = device['tracking_device']
             cam_pos = device['tracking_position']
@@ -401,47 +403,43 @@ class TrackingIngestForaging(dj.Imported):
                 log.warning('\tNo tracking directory found for {} ({}) - skipping...'.format(tdev, cam_pos))
                 continue
 
-            cam_trial_mapping_file = None
+            # --- Define the string that is used as prefix of video files ---
             tpos = None
-            
-            # for tpos_candidate in self.camera_position_mapper[cam_pos]:
-            #     camtrial_fn = '_{}.txt'.format(tpos_candidate)
-            #     log.info('Trying camera position trial map: {}'.format(tracking_sess_dir / camtrial_fn))
-            #     if (tracking_sess_dir / camtrial_fn).exists():
-            #         cam_trial_mapping_file = tracking_sess_dir / camtrial_fn
-            #         tpos = tpos_candidate
-            #         log.info('Matched! Using "{}"'.format(tpos))
-            #         break
-
             csv_file_ending = '-*'  # csv filename containing '-0000' or not
-
-            if cam_trial_mapping_file is None:  # This is always true for foraging task as of now (no dedicated mapping file)
-                log.info('Video-Trial mapper file (.txt) not found - Using one-to-one trial mapping')
-                tmap = {tr - (1 if session_rig == 'RRig-MTL' else 0): tr for tr in trials}  # one-to-one map
-                for tpos_candidate in self.camera_position_mapper[cam_pos]:
-                    camtrial_fn = '{}_[0-9]*{}.csv'.format(tpos_candidate, csv_file_ending)
-                    print('Trying camera position trial map: {}'.format(tracking_sess_dir / camtrial_fn))
-                    if list(tracking_sess_dir.glob(camtrial_fn)):
-                        tpos = tpos_candidate
-                        print('Matched! Using "{}"'.format(tpos))
-                        break
-            else:
-                tmap = self.load_campath(cam_trial_mapping_file)  # file:trial
+            for tpos_candidate in self.camera_position_mapper[cam_pos]:
+                camtrial_fn = '{}_[0-9]*{}.csv'.format(tpos_candidate, csv_file_ending)
+                print('Trying camera position trial map: {}'.format(tracking_sess_dir / camtrial_fn))
+                if list(tracking_sess_dir.glob(camtrial_fn)):
+                    tpos = tpos_candidate
+                    print('Matched! Using "{}"'.format(tpos))
+                    break
 
             if tpos is None:
                 log.warning('No tracking data for camera: {}... skipping'.format(cam_pos))
                 continue
 
-            n_tmap = len(tmap)
 
-            # sanity check
-            assert len(trials) >= n_tmap, '{} tracking trials found but only {} behavior trials available'.format(n_tmap, len(trials))
-
-            log.info('loading tracking data for {} trials'.format(n_tmap))
-
+            # ======= Trial mapping =======
+            # - Get frame numbers from NI and video
+            ni_frame_nums = (tracking.Tracking & key & device).fetch('tracking_samples', order_by='trial')
+            
+            all_csv_files = list(tracking_sess_dir.glob(f'{tpos}_*{csv_file_ending}.csv'))
+            csv_frame_nums = {}
+            for csv in all_csv_files:
+                csv_trial = int(re.search(f'.*{tpos}_(\d*){csv_file_ending}.*', str(csv)).group(1))
+                with open(csv, 'r') as f:
+                    last_line = f.readlines()[-1]
+                    csv_frame_nums[csv_trial] = int(last_line.split(',')[0]) + 1
+            csv_frame_nums = np.array(sorted(csv_frame_nums.items(), key=lambda kv: kv[0]))
+            
+            # - Do matching -
+            trial_map = _match_video_trial_dlc_to_ni(ni_frame_nums, csv_frame_nums)
+                      
+            # ======== Fetch data from csv and ingest ========
             i = 0
-            for t in tmap:  # TODO: global matching of ephys and video frame (for now, no tolerance to misalignment)
-                if tmap[t] not in trials:
+            
+            for t in trial_map:
+                if trial_map[t] not in trials:
                     log.warning('nonexistant trial {}.. skipping'.format(t))
                     continue
 
@@ -454,15 +452,15 @@ class TrackingIngestForaging(dj.Imported):
 
                 if not tracking_trial_filepath or len(tracking_trial_filepath) > 1:
                     log.debug('file mismatch: file: {} trial: {} ({})'.format(
-                        t, tmap[t], tracking_trial_filepath))
+                        t, trial_map[t], tracking_trial_filepath))
                     continue
 
                 if i % 50 == 0:
                     log.info('item {}/{}, trial #{} ({:.2f}%)'
-                             .format(i, n_tmap, t, (i/n_tmap)*100))
+                             .format(i, len(trial_map), t, (i/len(trial_map))*100))
                 else:
                     log.debug('item {}/{}, trial #{} ({:.2f}%)'
-                              .format(i, n_tmap, t, (i/n_tmap)*100))
+                              .format(i, len(trial_map), t, (i/len(trial_map))*100))
 
                 tracking_trial_filepath = tracking_trial_filepath[-1]
                 try:
@@ -473,13 +471,13 @@ class TrackingIngestForaging(dj.Imported):
                     raise e
 
                 recs = {}
-                rec_base = dict(key, trial=tmap[t], tracking_device=tdev)
+                rec_base = dict(key, trial=trial_map[t], tracking_device=tdev)
                 
                 for k in trk:
                     if k == 'samples':
-                        frame_count_from_NI = (tracking.Tracking & key & device & {'trial': t}).fetch1('tracking_samples')
+                        frame_count_from_NI = (tracking.Tracking & key & device & {'trial': trial_map[t]}).fetch1('tracking_samples')
                         frame_count_from_csv = len(trk['samples']['ts'])
-                        assert frame_count_from_NI == frame_count_from_csv, 'Trial {}: {} frames from NI but {} frames from csv!'.format(t, frame_count_from_NI, frame_count_from_csv)
+                        assert frame_count_from_NI == frame_count_from_csv, 'Video trial {} -> behav trial {}: {} frames from NI but {} frames from csv!'.format(t, trial_map[t], frame_count_from_NI, frame_count_from_csv)
                     else:
                         rec = dict(rec_base)
 
@@ -512,10 +510,11 @@ class TrackingIngestForaging(dj.Imported):
                         {**rec_base, 'lickport_x': lickport_x, 'lickport_y': lickport_y, 'lickport_likelihood': lickport_likelihood}, allow_direct_insert=True)
                 
                 tracking_files.append({
-                    **key, 'trial': tmap[t], 'tracking_device': tdev,
+                    **key, 'trial': trial_map[t], 'tracking_device': tdev,
                     'tracking_file': tracking_trial_filepath.relative_to(tracking_root_dir).as_posix()})
 
-            log.info('... completed {}/{} items.'.format(i, n_tmap))
+            log.info('... completed {}/{} items.'.format(i, len(trial_map)))
+
 
         log.info('\n---------------------')
         if tracking_files:
@@ -696,3 +695,50 @@ def _get_foraging_sess_tracking_dir(tracking_path, session):
         return dir
     else:
         raise FileNotFoundError('No or more than one ({}) found'.format(sess_dirname_glob))
+    
+def _match_video_trial_dlc_to_ni(ni_frame_nums, csv_frame_nums):
+    """
+    Generate trial mapping from behavioral trial (NI video feedback pulses) to video (csv file from DeepLabCut)
+    Matching trials requires matched number of frames
+    
+    Parameters
+    ----------
+    ni_frame_nums: list. frame number from NI
+    csv_frame_nums: list. frame number from csv files
+    
+    Return
+    ----------
+    trial_map: a dictionary consisting of mapping from video file name to ephys (behavior) trial
+    """
+    
+    trial_map = {}
+    offsets = [0]
+    max_relative_offset = 3
+    last_matched_csv_id = 0
+    
+    # Loop over behavioral trials, look for trials that have exactly matched number of frames
+    for behav_trial, ni_frame_num in zip(range(1, len(ni_frame_nums) + 1), ni_frame_nums):
+        same_count_csv_id = csv_frame_nums[ni_frame_num == csv_frame_nums[:, 1], 0]  # Use the fact that frame number is pretty random
+        if len(same_count_csv_id):
+            median_recent = np.median(offsets[-5:]) # Recent five offsets of previous trials as a running estimate
+            closest_same_count_csv_id = same_count_csv_id[np.argmin(abs(same_count_csv_id - behav_trial - median_recent))] # Find the offset that is closest to the running estimate
+            
+            # Sanity checks
+            if closest_same_count_csv_id <= last_matched_csv_id:  # Trial goes backward
+                log.info(f'        Discard!! Trial goes backward: behav -> csv: #{behav_trial} --> #{closest_same_count_csv_id}...')
+                continue
+            if abs(closest_same_count_csv_id - behav_trial) > max_relative_offset:   # Unresonable trial jump
+                log.info(f'        Discard!! Too large offset: behav -> csv: #{behav_trial} --> #{closest_same_count_csv_id}...')
+                continue
+
+            # Accept this matching
+            trial_map[closest_same_count_csv_id] = behav_trial
+            offsets.append(closest_same_count_csv_id - behav_trial)  
+            last_matched_csv_id = closest_same_count_csv_id               
+        else:  # No exact frame count matched
+            log.info(f'        No matched video found for behav #{behav_trial}!')
+    
+    log.info(f'     Unmatched trial: {len(ni_frame_nums) - len(trial_map)} / {len(ni_frame_nums)} = '
+             f'{(len(ni_frame_nums) - len(trial_map)) / len(ni_frame_nums):.2%}...')
+            
+    return trial_map
