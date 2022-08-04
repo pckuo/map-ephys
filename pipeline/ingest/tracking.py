@@ -318,19 +318,22 @@ class TrackingIngest(dj.Imported):
 class TrackingIngestForaging(dj.Imported):
     definition = """
     -> experiment.Session
+    -> tracking.TrackingDevice     # Move TrackingDevice here to make ingesting more independent across cameras
     """
 
     class TrackingFile(dj.Part):
         definition = '''
-        -> TrackingIngest
+        -> master
         -> experiment.SessionTrial
-        -> tracking.TrackingDevice
         ---
+        video_trial_num:        smallint                # cache the ni-to-video trial mapping
         tracking_file:          varchar(255)            # tracking file subpath
         '''
-
-    key_source = experiment.Session & (experiment.BehaviorTrial & 'task LIKE "foraging%"') \
-                & {'subject_id': 473360, 'session': 49}
+        
+    key_source =  (experiment.Session * tracking.TrackingDevice 
+                & (experiment.BehaviorTrial & 'task LIKE "foraging%"') 
+                & 'tracking_device in ("Camera 1")'
+                & 'session_date >= "2021-04-01"')    # Restrict camera here (Camera 0: Side; Camera 1: Bottom; Camera 2: Body)
 
     camera_position_mapper = {'side': ('side_face', ),  # List of possible mapping from 'tracking_position' to text string of the file names
                               'bottom': ('bottom_face', ),
@@ -355,11 +358,10 @@ class TrackingIngestForaging(dj.Imported):
             }
 
     
-    def make(self, key, tracking_exists=False):
+    def make(self, key):
         '''
         TrackingIngest .make() function
-        To rerun the tracking ingestion for an existing session to add new tracking data for new devices:
-            TrackingIngest().make(session_key, tracking_exists=True)
+
         '''
         log.info('\n==================================================================')
         log.info('TrackingIngest().make(): key: {k}'.format(k=key))
@@ -376,16 +378,13 @@ class TrackingIngestForaging(dj.Imported):
         # ========== Looping over all cameras ==========
         # Camera 0: Side; Camera 1: Bottom; Camera 2: Body
         # camera_restriction = 'tracking_device in ("Camera 0", "Camera 1", "Camera 2")'
-        camera_restriction = 'tracking_device in ("Camera 1")'
+        # camera_restriction = 'tracking_device in ("Camera 1")'
+        
         tracking_files = []
         
-        for device in (tracking.TrackingDevice & camera_restriction).fetch(as_dict=True):
+        for device in (tracking.TrackingDevice & key).fetch(as_dict=True):  # Now TrackingDevice has been included in key
             tdev = device['tracking_device']
             cam_pos = device['tracking_position']
-
-            if tracking_exists and (tracking.Tracking & key & device):
-                log.info('\nSession tracking exists for: {} ({}). Skipping...'.format(tdev, cam_pos))
-                continue
 
             log.info('\n-------------------------------------')
             log.info('\nSearching for session tracking data directory for: {} ({})'.format(tdev, cam_pos))
@@ -423,6 +422,10 @@ class TrackingIngestForaging(dj.Imported):
             # - Get frame numbers from NI and video
             ni_frame_nums = (tracking.Tracking & key & device).fetch('tracking_samples', order_by='trial')
             
+            if len(ni_frame_nums) == 0:
+                log.warning(f'   No NI video frame ingested for {key}... skipping!!!')
+                continue
+            
             all_csv_files = list(tracking_sess_dir.glob(f'{tpos}_*{csv_file_ending}.csv'))
             csv_frame_nums = {}
             for csv in all_csv_files:
@@ -438,29 +441,29 @@ class TrackingIngestForaging(dj.Imported):
             # ======== Fetch data from csv and ingest ========
             i = 0
             
-            for t in trial_map:
-                if trial_map[t] not in trials:
-                    log.warning('nonexistant trial {}.. skipping'.format(t))
+            for video_trial_num in trial_map:
+                if trial_map[video_trial_num] not in trials:
+                    log.warning('nonexistant trial {}.. skipping'.format(video_trial_num))
                     continue
 
                 i += 1
                 
                 # ----- Read tracking from csv files ------
                 # ex: dl59_side_1(-0000).csv
-                tracking_trial_filename = '{}_{}{}.csv'.format(tpos, t, csv_file_ending)
+                tracking_trial_filename = '{}_{}{}.csv'.format(tpos, video_trial_num, csv_file_ending)
                 tracking_trial_filepath = list(tracking_sess_dir.glob(tracking_trial_filename))
 
                 if not tracking_trial_filepath or len(tracking_trial_filepath) > 1:
                     log.debug('file mismatch: file: {} trial: {} ({})'.format(
-                        t, trial_map[t], tracking_trial_filepath))
+                        video_trial_num, trial_map[video_trial_num], tracking_trial_filepath))
                     continue
 
                 if i % 50 == 0:
                     log.info('item {}/{}, trial #{} ({:.2f}%)'
-                             .format(i, len(trial_map), t, (i/len(trial_map))*100))
+                             .format(i, len(trial_map), video_trial_num, (i/len(trial_map))*100))
                 else:
                     log.debug('item {}/{}, trial #{} ({:.2f}%)'
-                              .format(i, len(trial_map), t, (i/len(trial_map))*100))
+                              .format(i, len(trial_map), video_trial_num, (i/len(trial_map))*100))
 
                 tracking_trial_filepath = tracking_trial_filepath[-1]
                 try:
@@ -471,13 +474,13 @@ class TrackingIngestForaging(dj.Imported):
                     raise e
 
                 recs = {}
-                rec_base = dict(key, trial=trial_map[t], tracking_device=tdev)
+                rec_base = dict(key, trial=trial_map[video_trial_num], tracking_device=tdev)
                 
                 for k in trk:
                     if k == 'samples':
-                        frame_count_from_NI = (tracking.Tracking & key & device & {'trial': trial_map[t]}).fetch1('tracking_samples')
+                        frame_count_from_NI = (tracking.Tracking & key & device & {'trial': trial_map[video_trial_num]}).fetch1('tracking_samples')
                         frame_count_from_csv = len(trk['samples']['ts'])
-                        assert frame_count_from_NI == frame_count_from_csv, 'Video trial {} -> behav trial {}: {} frames from NI but {} frames from csv!'.format(t, trial_map[t], frame_count_from_NI, frame_count_from_csv)
+                        assert frame_count_from_NI == frame_count_from_csv, 'Video trial {} -> behav trial {}: {} frames from NI but {} frames from csv!'.format(video_trial_num, trial_map[video_trial_num], frame_count_from_NI, frame_count_from_csv)
                     else:
                         rec = dict(rec_base)
 
@@ -488,10 +491,6 @@ class TrackingIngestForaging(dj.Imported):
 
                         recs[k] = rec
 
-                # Already done during ephys ingestion (use feedback frames in NI)
-                # tracking.Tracking.insert1(
-                #     recs['tracking'], allow_direct_insert=True)
-                
                 # ---- Do insertion ----
                 # Simple way of looping over all fiducials
                 for fiducial, (prefix, sub_attr) in self.fiducial_table_mapper[cam_pos].items():
@@ -510,16 +509,16 @@ class TrackingIngestForaging(dj.Imported):
                         {**rec_base, 'lickport_x': lickport_x, 'lickport_y': lickport_y, 'lickport_likelihood': lickport_likelihood}, allow_direct_insert=True)
                 
                 tracking_files.append({
-                    **key, 'trial': trial_map[t], 'tracking_device': tdev,
-                    'tracking_file': tracking_trial_filepath.relative_to(tracking_root_dir).as_posix()})
+                    **key, 'trial': trial_map[video_trial_num],  # 'tracking_device': tdev,  # tracking_device already in master table's key
+                    'tracking_file': tracking_trial_filepath.relative_to(tracking_root_dir).as_posix(),
+                    'video_trial_num': video_trial_num})
 
             log.info('... completed {}/{} items.'.format(i, len(trial_map)))
 
 
         log.info('\n---------------------')
         if tracking_files:
-            if not tracking_exists:
-                self.insert1(key)
+            self.insert1(key)
             self.TrackingFile.insert(tracking_files)
 
             log.info('Tracking ingestion completed: {k}'.format(k=key))
@@ -738,7 +737,7 @@ def _match_video_trial_dlc_to_ni(ni_frame_nums, csv_frame_nums):
         else:  # No exact frame count matched
             log.info(f'        No matched video found for behav #{behav_trial}!')
     
-    log.info(f'     Unmatched trial: {len(ni_frame_nums) - len(trial_map)} / {len(ni_frame_nums)} = '
+    print(f'     Unmatched trial: {len(ni_frame_nums) - len(trial_map)} / {len(ni_frame_nums)} = '
              f'{(len(ni_frame_nums) - len(trial_map)) / len(ni_frame_nums):.2%}...')
             
     return trial_map
