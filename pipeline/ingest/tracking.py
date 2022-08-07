@@ -332,8 +332,9 @@ class TrackingIngestForaging(dj.Imported):
         
     key_source =  (experiment.Session * tracking.TrackingDevice 
                 & (experiment.BehaviorTrial & 'task LIKE "foraging%"') 
-                & 'tracking_device in ("Camera 1")'
-                & 'session_date >= "2021-04-01"')    # Restrict camera here (Camera 0: Side; Camera 1: Bottom; Camera 2: Body)
+                & 'tracking_device in ("Camera 1")'     # Restrict camera here (Camera 0: Side; Camera 1: Bottom; Camera 2: Body)
+                & 'session_date >= "2021-04-01"')
+               # & {'subject_id': 494691, 'session': 19})    
 
     camera_position_mapper = {'side': ('side_face', ),  # List of possible mapping from 'tracking_position' to text string of the file names
                               'bottom': ('bottom_face', ),
@@ -506,7 +507,8 @@ class TrackingIngestForaging(dj.Imported):
                     lickport_y = (recs['LickportLeft']['LickportLeft_y'] + recs['LickportRight']['LickportRight_y']) / 2
                     lickport_likelihood = (recs['LickportLeft']['LickportLeft_likelihood'] + recs['LickportRight']['LickportRight_likelihood']) / 2
                     tracking.Tracking.LickPortTracking.insert1(
-                        {**rec_base, 'lickport_x': lickport_x, 'lickport_y': lickport_y, 'lickport_likelihood': lickport_likelihood}, allow_direct_insert=True)
+                        {**rec_base, 'lickport_x': lickport_x, 'lickport_y': lickport_y, 'lickport_likelihood': lickport_likelihood}, 
+                        allow_direct_insert=True)
                 
                 tracking_files.append({
                     **key, 'trial': trial_map[video_trial_num],  # 'tracking_device': tdev,  # tracking_device already in master table's key
@@ -712,7 +714,7 @@ def _match_video_trial_dlc_to_ni(ni_frame_nums, csv_frame_nums):
     
     trial_map = {}
     offsets = [0]
-    max_relative_offset = 3
+    max_relative_offset = 10
     last_matched_csv_id = 0
     
     # Loop over behavioral trials, look for trials that have exactly matched number of frames
