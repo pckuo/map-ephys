@@ -20,9 +20,9 @@ from . import InvalidBehaviorTrialError
 from .utils import foraging_bpod
 
 from pipeline import lab, experiment
-from pipeline import get_schema_name, dict_to_hash
+from pipeline import get_schema_name, dict_to_hash, create_schema_settings
 
-schema = dj.schema(get_schema_name('ingest_behavior'))
+schema = dj.schema(get_schema_name('ingest_behavior'), **create_schema_settings)
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 

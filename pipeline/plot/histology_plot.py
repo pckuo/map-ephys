@@ -22,11 +22,13 @@ def plot_probe_tracks(session_key, ax=None):
     probe_tracks = {}
 
     if len(session_key) == 1:  # Tracks for one session. Color encodes insertion number
-
         for probe_insert in (ephys.ProbeInsertion & session_key).fetch('KEY'):
             if not (histology.LabeledProbeTrack & probe_insert):
                 continue
-
+            
+            if not (histology.LabeledProbeTrack.Point & probe_insert):
+                raise ValueError(f'No LabeledProbeTrack.Point for insertion {probe_insert}')
+            
             shank_count = (ephys.ProbeInsertion & probe_insert).aggr(
                 histology.LabeledProbeTrack.Point, shank_count='COUNT(DISTINCT shank)').fetch1('shank_count')
 

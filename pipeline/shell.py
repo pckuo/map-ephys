@@ -66,6 +66,11 @@ def logsetup(*args):
     logging.basicConfig(format=msgfmt, datefmt=datefmt, level=logging.ERROR,
                         handlers=handlers)
 
+    try:
+        dj.logger.setLevel(level)
+    except AttributeError:
+        pass
+
     log.setLevel(level)
 
     logging.getLogger('pipeline').setLevel(level)
@@ -95,6 +100,12 @@ def ingest_ephys(*args):
     ephys_ingest.EphysIngest().populate(display_progress=True, suppress_errors=True)
     experiment.Breathing().populate(display_progress=True)
     experiment.Piezoelectric().populate(display_progress=True)
+
+
+def ingest_units(*args):
+    from pipeline import ephys
+    ephys.Unit.populate(reserve_jobs=True, display_progress=True, suppress_errors=True)
+    ephys.ClusterMetric.populate(reserve_jobs=True, display_progress=True, suppress_errors=True)
 
 
 def ingest_tracking(*args):
@@ -748,13 +759,16 @@ def _clean_up(pipeline_modules, additional_error_patterns=[]):
                 for e in _generic_errors + additional_error_patterns
             ]
         ).delete()
+
         # clear stale "reserved" jobs
         current_connections = [v[0] for v in dj.conn().query(
             'SELECT id FROM information_schema.processlist WHERE id <> CONNECTION_ID() ORDER BY id')]
-        stale_jobs = (pipeline_module.schema.jobs
-                      & 'status = "reserved"'
-                      & f'connection_id NOT IN {tuple(current_connections)}')
-        (pipeline_module.schema.jobs & stale_jobs).delete()
+        if current_connections:
+            current_connections = f'({", ".join([str(c) for c in current_connections])})'
+            stale_jobs = (pipeline_module.schema.jobs
+                          & 'status = "reserved"'
+                          & f'connection_id NOT IN {current_connections}')
+            (pipeline_module.schema.jobs & stale_jobs.fetch('KEY')).delete()
 
 
 def loop(*args):
@@ -787,6 +801,7 @@ actions = {
     'ingest-behavior': (ingest_behavior, 'ingest behavior data'),
     'ingest-foraging': (ingest_behavior, 'ingest foraging behavior data'),
     'ingest-ephys': (ingest_ephys, 'ingest ephys data'),
+    'ingest-units': (ingest_units, 'ingest spike sorting results and QC data'),
     'ingest-tracking': (ingest_tracking, 'ingest tracking data'),
     'ingest-histology': (ingest_histology, 'ingest histology data'),
     'ingest-all': (ingest_all, 'run auto ingest job (load all types)'),
