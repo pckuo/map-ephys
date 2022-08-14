@@ -421,8 +421,8 @@ def load_meta_foraging():
                         'subject_id':item['animal#'],
                         'water_restriction_number': item['ID'],
                         'cage_number': item['cage#'],
-                        'wr_start_date': df_wr['Date'][0],
-                        'wr_start_weight': df_wr['Weight'][0],
+                        'wr_start_date': df_wr['Date'][df_wr['Date'].first_valid_index()],
+                        'wr_start_weight': df_wr['Weight'][df_wr['Weight'].first_valid_index()],
                         }
                 try:
                     lab.WaterRestriction().insert1(wrdata)

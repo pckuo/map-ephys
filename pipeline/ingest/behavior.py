@@ -401,7 +401,12 @@ class BehaviorBpodIngest(dj.Imported):
     def key_source(self):
         key_source = []
 
-        IDs = {k: v for k, v in zip(*lab.WaterRestriction().fetch(
+        IDs = {k: v for k, v in zip(*(lab.WaterRestriction & 
+                                      '''water_restriction_number NOT LIKE "DL%" AND 
+                                         water_restriction_number NOT LIKE "dl%" AND 
+                                         water_restriction_number NOT LIKE "SC%" AND
+                                         water_restriction_number NOT LIKE "tw%"'''
+                                      ).fetch(
             'water_restriction_number', 'subject_id'))}
 
         for subject_now, subject_id_now in IDs.items():
@@ -418,20 +423,18 @@ class BehaviorBpodIngest(dj.Imported):
                 # we use it when both start and end times are filled in and Water during training > 0; restriction, freewater and handling is skipped
                 if (df_wr_row['Time'] and isinstance(df_wr_row['Time'], str)
                         and df_wr_row['Time-end'] and isinstance(df_wr_row['Time-end'], str)
-                        and df_wr_row['Training type'] != 'restriction'
-                        and df_wr_row['Training type'] != 'handling'
-                        and df_wr_row['Training type'] != 'freewater'
-                        and df_wr_row['Water during training'] > 0):
+                        and 'foraging' in str(df_wr_row['Training type'])):
 
-                    try:
-                        date_now = datetime.strptime(df_wr_row.Date, '%Y-%m-%d').date()
-                    except:
+                    for f in ['%Y-%m-%d', '%Y/%m/%d', '%m/%d/%Y']:
                         try:
-                            date_now = datetime.strptime(df_wr_row.Date, '%Y/%m/%d').date()
+                            date_now = datetime.strptime(df_wr_row.Date.split(' ')[0], f).date()
+                            break
                         except:
-                            log.info('Unable to parse session date: {}. Skipping...'.format(
-                                df_wr_row.Date))
-                            continue
+                            pass
+                    else:
+                        log.info('Unable to parse session date for {}: {}. Skipping...'.format(
+                            subject_now, df_wr_row.Date))
+                        continue
 
                     if not (experiment.Session & {'subject_id': subject_id_now,
                                                   'session_date': date_now}):
@@ -441,7 +444,8 @@ class BehaviorBpodIngest(dj.Imported):
                                            'session_weight': df_wr_row['Weight'],
                                            'session_water_earned': df_wr_row[
                                                'Water during training'],
-                                           'session_water_extra': df_wr_row['Extra water']})
+                                           'session_water_extra': df_wr_row['Extra water'],
+                                           'session_number_xls': int(df_wr_row['Training Session']) if 'Training Session' in df_wr_row else None})
 
         return key_source
 
@@ -568,11 +572,22 @@ class BehaviorBpodIngest(dj.Imported):
                     log.info('ERROR: unhandled setup name {} (from {}). Skipping...'.format(
                         session.setup_name, session.path))
                     continue  # Another integrity check here
-
+                
                 log.debug('synthesizing session ID')
-                key['session'] = (dj.U().aggr(experiment.Session()
+                synthesized_session_ID = (dj.U().aggr(experiment.Session()
                                               & {'subject_id': subject_id_now},
                                               n='max(session)').fetch1('n') or 0) + 1
+                
+                if key['session_number_xls'] is not None:
+                    key['session'] = key['session_number_xls']
+                    if key['session_number_xls'] != synthesized_session_ID:
+                        log.info(f"WARNING: ingested using session ID = {key['session_number_xls']}, but synthesized session ID = {synthesized_session_ID}!")
+                    else:
+                        log.info(f"session ID = {key['session_number_xls']} (matched)")
+                else:
+                    key['session'] = synthesized_session_ID  # Old method
+                    log.info(f"session ID = {synthesized_session_ID} (synthesized)")
+                
                 sess_key = {**key,
                             'session_time': session_time.time(),
                             'username': df_behavior_session['experimenter'][0],
