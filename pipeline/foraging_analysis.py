@@ -126,14 +126,16 @@ class SessionStats(dj.Computed):
         
         # Double dipping in missed trial is detected only for sessions later than the first day of using new lickport retraction logic 
         if (experiment.Session & key & 'session_date > "2020-08-11"'):   
-            session_stats.update(session_double_dipping_ratio_miss = len(q_double_dipping & q_miss) / len(q_miss),
-                                 session_double_dipping_ratio = len(q_double_dipping & q_actual_finished) / len(q_actual_finished))
+            session_stats.update(session_double_dipping_ratio_miss = len(q_double_dipping & q_miss) / len(q_miss)
+                                 if q_miss else np.nan,
+                                 session_double_dipping_ratio = len(q_double_dipping & q_actual_finished) / len(q_actual_finished)
+                                 if q_actual_finished else np.nan)
             
         # -- Session-wise foraging efficiency and schedule stats (2lp only) --
         if len(experiment.BehaviorTrial & key & 'task="foraging"'):
             # Get reward rate (hit but not autowater) / (hit but not autowater + miss but not autowater)
             q_pure_hit_num = q_hit.proj() - q_auto_water.proj()
-            reward_rate = len(q_pure_hit_num) / len(q_actual_finished)
+            reward_rate = len(q_pure_hit_num) / len(q_actual_finished) if q_actual_finished else np.nan
             
             q_actual_finished_reward_prob = (experiment.SessionTrial * experiment.SessionBlock.BlockTrial  # Session-block-trial
                                            * experiment.SessionBlock.WaterPortRewardProbability  # Block-trial-p_reward
@@ -174,7 +176,10 @@ class SessionStats(dj.Computed):
                 random_number_Rs = None
                 
             # Compute foraging efficiency
-            for_eff_optimal, for_eff_optimal_random_seed = foraging_eff(reward_rate, p_Ls, p_Rs, random_number_Ls, random_number_Rs)
+            if q_actual_finished:
+                for_eff_optimal, for_eff_optimal_random_seed = foraging_eff(reward_rate, p_Ls, p_Rs, random_number_Ls, random_number_Rs)
+            else:
+                for_eff_optimal, for_eff_optimal_random_seed = np.nan, np.nan
 
             # Reward schedule stats
             if (SessionTaskProtocol & key).fetch1('session_real_foraging'):   # Real foraging
