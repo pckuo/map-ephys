@@ -651,19 +651,29 @@ def export_foraging_behavior():
     
 
     # %%
-    foraging_sessions = (experiment.Session * lab.WaterRestriction) & (experiment.BehaviorTrial & 'task_protocol = 100')  # Two-lickport foraging
+    foraging_sessions = ((experiment.Session * lab.WaterRestriction) & (experiment.BehaviorTrial & 'task_protocol = 100')
+                         )# Two-lickport foraging
     
     all_foraging_subject = (dj.U('water_restriction_number') & foraging_sessions).fetch('KEY')
     for subject_key in all_foraging_subject:
         sessions_this_subject = (foraging_sessions & subject_key).fetch('KEY')
         h2o = (lab.WaterRestriction & subject_key).fetch1('water_restriction_number')
         
+        # Skip if npy already exists
+        if pathlib.Path(f'./report/{h2o}.npy').exists():
+            print(f'Skip {h2o} because .npy already exists...')
+            continue        
+        
         pathlib.Path(f'./report/{h2o}/').mkdir(parents=False, exist_ok=True)
-                
         this_subject = dict()
+            
         for session_key in sessions_this_subject:
             choice_history, reward_history, _ , p_reward, _ = get_session_history(session_key, remove_ignored=False)
-            trial_num, foraging_efficiency = (foraging_analysis.SessionStats & session_key).fetch1('session_total_trial_num', 'session_foraging_eff_optimal')
+            try:
+                trial_num, foraging_efficiency = (foraging_analysis.SessionStats & session_key).fetch1('session_total_trial_num', 'session_foraging_eff_optimal')
+            except:
+                print(f'Error in fetching foraging_efficiency for {h2o}, {session_key}!!')
+                continue
             
             fig, ax = foraging_model_plot.plot_session_lightweight([choice_history, reward_history, p_reward])  # Include ignored trials
             # foraging_model_plot.plot_session_fitted_choice(session_key)    
@@ -676,6 +686,7 @@ def export_foraging_behavior():
                                                     'trial_num': trial_num,
                                                     'foraging_efficiency': foraging_efficiency}
             plt.close()
+            print(f'Done {h2o}, {session_key}')
            
         np.save(f'./report/{h2o}.npy', this_subject, allow_pickle=True)
         
