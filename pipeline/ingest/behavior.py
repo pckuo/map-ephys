@@ -14,6 +14,7 @@ import pandas as pd
 import decimal
 import warnings
 import datajoint as dj
+import json
 
 from pybpodgui_api.models.project import Project as BPodProject
 from . import InvalidBehaviorTrialError
@@ -396,6 +397,15 @@ class BehaviorBpodIngest(dj.Imported):
             projects.append(BPodProject())
             projects[-1].load(projectdir)
         return projects
+    
+    @staticmethod
+    def _get_message(df, MSG):
+        """
+        Get message from df_behavior_trial
+        Locate the row of 'MSG' and return the next content in the next row
+        """
+        return df.loc[df.index[df['MSG'].str.contains(MSG)] + 1, 'MSG']
+
 
     @property
     def key_source(self):
@@ -474,6 +484,9 @@ class BehaviorBpodIngest(dj.Imported):
         subject_now = (lab.WaterRestriction() & {'subject_id': subject_id_now}).fetch1(
             'water_restriction_number')
         date_now_str = key['session_date'].strftime('%Y%m%d')
+        
+        if key['session_date'] < date(2022, 5, 15): return  # Photosim ingestion works only for the new structure so far.
+                
         log.info('h2o: {h2o}, date: {d}'.format(h2o=subject_now, d=date_now_str))
 
         # ---- Ingest information for BPod projects ----
@@ -503,7 +516,8 @@ class BehaviorBpodIngest(dj.Imported):
                          'trial_choice', 'trial_event', 'action_event',
                          'photostim', 'photostim_location', 'photostim_trial',
                          'photostim_trial_event',
-                         'valve_setting', 'valve_open_dur', 'available_reward')
+                         'valve_setting', 'valve_open_dur', 'available_reward',
+                         'photostim_foraging_trial')
 
         # getting started
         concat_rows = {k: list() for k in tbls_2_insert}
@@ -525,6 +539,7 @@ class BehaviorBpodIngest(dj.Imported):
             # It must have at least one 'trial start' and 'trial end'
             trial_start_idxs = df_behavior_session[(df_behavior_session['TYPE'] == 'TRIAL') & (
                         df_behavior_session['MSG'] == 'New trial')].index
+            
             if not len(trial_start_idxs):
                 log.info('No "trial start" for {}. Skipping...'.format(csvfilename))
                 continue  # Make sure 'start' exists, otherwise move on to try the next bpodsess file if exists
@@ -609,8 +624,14 @@ class BehaviorBpodIngest(dj.Imported):
 
             # extracting trial data
             session_start_time = datetime.combine(sess_key['session_date'], sess_key['session_time'])
-            trial_start_idxs = df_behavior_session[(df_behavior_session['TYPE'] == 'TRIAL') & (df_behavior_session['MSG'] == 'New trial')].index
-            trial_start_idxs -= 2 # To reflect the change that bitcode is moved before the "New trial" line
+            
+            if sess_key['session_date'] > date(2021, 5, 23):
+                # starting from https://github.com/hanhou/Foraging-Pybpod/commit/775dff4435a8c9b8ad14501f0b44de741d683737
+                trial_start_idxs = df_behavior_session[(df_behavior_session['TYPE'] == 'stdout') & (df_behavior_session['MSG'] == 'Blocknumber:')].index
+            else:
+                trial_start_idxs = df_behavior_session[(df_behavior_session['TYPE'] == 'TRIAL') & (df_behavior_session['MSG'] == 'New trial')].index
+                trial_start_idxs -= 2 # To reflect the change that bitcode is moved before the "New trial" line
+            
             trial_start_idxs = pd.Index([0]).append(trial_start_idxs[1:])  # so the random seed will be present
             trial_end_idxs = trial_start_idxs[1:].append(pd.Index([(max(df_behavior_session.index))]))
 
@@ -708,6 +729,7 @@ class BehaviorBpodIngest(dj.Imported):
                 #       (2) `trial_start_idx` in this for loop = the start of bpod-trial ('New Trial' in bpod csv file)
                 #            = the reference point of BPOD-TIME  = NIDQ bpod-trial channel
                 #    They are far from each other because I start the bpod trial at the middle of ITI (Foraging_bpod: e9a8ffd6) to cover video recording during ITI.
+                #    --> Update: now I move the bpod trial at the end of the last trial!! (ITI after = 0), starting from Foraging_bpod: f86af9e901, 2022-05-15
                 # 3. In theory, *bitcodestart* = *delay* (since there's no sample period),
                 #    but in practice, the bitcode (21*20=420 ms) and lickport movement (~100 ms) also take some time.
                 #    Note that bpod doesn't know the exact time when lickports are in place, so we can get *delay* only from NIDQ zaber channel (ephys.TrialEvent.'zaberinposition').
@@ -720,7 +742,7 @@ class BehaviorBpodIngest(dj.Imported):
                 #           the same events from pybpod.csv and bitcode.mat across all trials, e.g., *bitcodestart* <--> *sTrig*, or 0 <--> NIDQ bpod-"trial trigger" channel
                 #    Note that one should NEVER use PC-TIME from the bpod csv files (at least for ephys-related alignment)!!!
                 
-                # ----- BPOD STATES (all events except licks) -----
+                # ----- BPOD STATES (all events except licks and photostim) -----
                 bpod_states_this_trial = df_behavior_trial[(df_behavior_trial['TYPE'] == 'STATE') & (df_behavior_trial['BPOD-INITIAL-TIME'] > 0)]   # All states of this trial
                 trial_event_count = 0
 
@@ -762,7 +784,96 @@ class BehaviorBpodIngest(dj.Imported):
                     # save gocue time for early-lick below
                     if trial_event_type == 'go':
                         gocue_time = initials[0]
+                        
+                # ------ Photostim info from csv -------
+                # Fill out TrialEventTypes: 'laserLon', 'laserLdown', 'laserLoff', 'laserRon', 'laserRdown', 'laserRoff'
+                
+                # Act as a master switch:
+                laser_power_txt = self._get_message(df_behavior_trial, 'laser power')
+                
+                # if_laser_this_trial = len(laser_power_txt) # TODO make this compatible before 2021-08-25 
+                if_laser_this_trial = sum(df_behavior_trial['+INFO'] == 'GlobalTimer4_Start') + sum(df_behavior_trial['+INFO'] == 'GlobalTimer5_Start')
+                photostim_event_id = 0
+                
+                if if_laser_this_trial:
+                    
+                    # Retrieve laser power
+                    laser_power_list = json.loads(laser_power_txt.iloc[0])  # Assuming both sides have the same power (calibrated)
+                    if sess_key['session_date'] > date(2021, 5, 15):
+                        laser_power = laser_power_list[0]  # Calibrated laser power
+                    else:   # Use post-hoc calibration
+                        laser_cali =  np.array([
+                            [0.5, 0.14, 0.08],
+                            [1.0, 0.25, 0.15],
+                            [2.5, 0.75, 0.55],
+                            [5.0, 1.5, 1.1],
+                            [7.5, 2.2, 1.65],
+                            [10.0, 2.95, 2.25],
+                            [13.5, 4.8, 3.7]     
+                        ])
+                        p = laser_cali[:, 0]
+                        v = np.mean(laser_cali[:, 1:], axis=1) 
+                        laser_power = np.interp(laser_power_list[1], v, p)   # Approximated power
+                        
+                    # Retrieve WavePlayer events
+                    side_event_mapping = {'L': ['WavePlayer1_2', 'WavePlayer1_6'], 'R': ['WavePlayer1_4', 'WavePlayer1_6']}
+                    stim_sides = ''
+                    for side, event in side_event_mapping.items():
+                        event_row = df_behavior_trial.loc[df_behavior_trial['+INFO'].isin(event), 'BPOD-INITIAL-TIME']
+                        if len(event_row):
+                            assert len(event_row) == 3, 'ERROR: len(WavePlayer1_x) is not 3!!!'  # laser on, laser down, laser off
+                            stim_sides += side
+                            
+                            # For trial event
+                            for bpod_time, suffix in zip(event_row, ['on', 'down', 'off']):
+                                rows['trial_event'].extend(
+                                    [{**sess_trial_key,
+                                    'trial_event_id': trial_event_count,
+                                    'trial_event_type': f'laser{side}{suffix}',
+                                    'trial_event_time': bpod_time,
+                                    'duration': 0}])   # list comprehension doesn't work here
+                                trial_event_count += 1
+                                
+                            # Compute time to go cue (this could be from 'L' or 'R', but here we assume if both sides are stimulated, they are in sync)
+                            on_to_go_cue = event_row.iloc[0] - gocue_time
+                            off_to_go_cue = event_row.iloc[2] - gocue_time
+                            duration = off_to_go_cue - on_to_go_cue
+                            ramping_down = round(event_row.iloc[2] - event_row.iloc[1], 2)  # To the precision of 10 ms
+                            
+                    # For experiment.PhotostimForaging
+                    side_code = {'L': 0, 'R': 1, 'LR': 2, 'RL': 2}[stim_sides]
+                    this_row = {**sess_trial_key,
+                                'photostim_event_id': photostim_event_id,  # dummy for now. just in case there are multiple laser events for one trial
+                                'side': side_code,
+                                'power': laser_power,
+                                'on_to_go_cue': on_to_go_cue,
+                                'off_to_go_cue': off_to_go_cue,
+                                'duration': duration,
+                                'ramping_down': ramping_down,
+                                }
+                    photostim_event_id += 1   
+                    
+                    # Nullables and sanity checks
+                    align_to_from_stdout = self._get_message(df_behavior_trial, 'laser aligned to')
+                    if len(align_to_from_stdout):
+                        this_row['bpod_timer_align_to'] = align_to_from_stdout.values[0].lower()
+                        
+                    timer_offset_from_stdout = self._get_message(df_behavior_trial, 'laser timer offset')
+                    if len(timer_offset_from_stdout):
+                        tmp = json.loads(timer_offset_from_stdout.iloc[0])
+                        this_row['bpod_timer_offset'] = tmp[0] if isinstance(tmp, list) else tmp
 
+                    side_code_from_stdout = self._get_message(df_behavior_trial, 'laser side')
+                    if len(side_code_from_stdout):
+                        assert side_code == side_code_from_stdout.astype(int).iloc[0], 'ERROR: stim_sides from WavePlayer != side from stdout message'
+                        
+                    ramping_down_from_stdout = self._get_message(df_behavior_session, 'laser ramping down')
+                    if len(ramping_down_from_stdout):
+                        assert ramping_down == float(ramping_down_from_stdout.iloc[0]), 'ERROR: ramping down not consistent!!'
+                    
+                    rows['photostim_foraging_trial'].extend([this_row])
+                
+                
                 # ------ Licks (use EVENT instead of STATE because not all licks triggered a state change) -------
                 lick_times = {}
                 for lick_port in lick_ports:
@@ -922,6 +1033,9 @@ class BehaviorBpodIngest(dj.Imported):
 
         log.info('BehaviorIngest.make(): ... experiment.TrialEvent')
         experiment.TrialEvent.insert(concat_rows['trial_event'], **insert_settings)
+        
+        log.info('BehaviorIngest.make(): ... experiment.PhotostimForagingTrial')
+        experiment.PhotostimForagingTrial.insert(concat_rows['photostim_foraging_trial'], **insert_settings)
 
         log.info('BehaviorIngest.make(): ... experiment.ActionEvent')
         experiment.ActionEvent.insert(concat_rows['action_event'], **insert_settings)
@@ -1598,3 +1712,4 @@ def load_multi_target_licking_matfile(skey, matlab_filepath):
         # end of trial loop.
 
     return rows
+
