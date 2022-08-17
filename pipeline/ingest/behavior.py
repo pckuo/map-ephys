@@ -820,8 +820,24 @@ class BehaviorBpodIngest(dj.Imported):
                     stim_sides = ''
                     for side, event in side_event_mapping.items():
                         event_row = df_behavior_trial.loc[df_behavior_trial['+INFO'].isin(event), 'BPOD-INITIAL-TIME']
-                        if len(event_row):
-                            assert len(event_row) == 3, 'ERROR: len(WavePlayer1_x) is not 3!!!'  # laser on, laser down, laser off
+                        
+                        if len(event_row): # laser on, laser down, laser off
+                            timer_start = df_behavior_trial.loc[df_behavior_trial['+INFO'] == 'GlobalTimer4_Start', 'BPOD-INITIAL-TIME']
+                            if len(event_row) == 2:   
+                                if event_row.iloc[1] - timer_start.iloc[0] > 0.001:  # To capture the bug of missing first 'WavePlayer1_x' after timer4_start
+                                    event_row = timer_start.append(event_row)  # Insert the fake first `WavePlayer1_x` using timer4_start
+                                    log.info(f"Warning: , len({event}) = 2 @ {subject_now}, session {key['session']}, trial {trial_num}. Fixed!")
+                                else:
+                                    log.info(f"Warning: , len({event}) = 2 @ {subject_now}, session {key['session']}, trial {trial_num}. Cannot fix!")
+                                    continue
+                            elif len(event_row) == 1:  # In case where photostim starts after go cue and terminates at the end of the trial (no active stop or ramping down)
+                                if event_row.iloc[0] - timer_start.iloc[0] < 0.001:  # The only `WavePlayer` event should be very close to TimerStart
+                                    trial_end = df_behavior_trial.loc[df_behavior_trial['MSG'] == 'End', 'BPOD-INITIAL-TIME'].iloc[0]
+                                    event_row = event_row.append(pd.Series([trial_end, trial_end]))  # photosim terminates at trial end; no ramping down
+                                else:
+                                    log.info(f"Warning: , len({event}) = 1 @ {subject_now}, session {key['session']}, trial {trial_num}. Cannot fix!")
+                                    continue
+
                             stim_sides += side
                             
                             # For trial event
@@ -841,6 +857,9 @@ class BehaviorBpodIngest(dj.Imported):
                             ramping_down = round(event_row.iloc[2] - event_row.iloc[1], 2)  # To the precision of 10 ms
                             
                     # For experiment.PhotostimForaging
+                    if stim_sides == '': 
+                        continue
+                    
                     side_code = {'L': 0, 'R': 1, 'LR': 2, 'RL': 2}[stim_sides]
                     this_row = {**sess_trial_key,
                                 'photostim_event_id': photostim_event_id,  # dummy for now. just in case there are multiple laser events for one trial
