@@ -1,4 +1,5 @@
 import datajoint as dj
+from datetime import datetime
 from pipeline import lab, get_schema_name, foraging_analysis, report, psth_foraging, foraging_model
 import multiprocessing as mp
 
@@ -39,6 +40,7 @@ def populatemytables_core(arguments, runround):
         
 def show_progress(rounds):
     print('\n--- Current progress ---')
+    print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     for runround in rounds:
         for table in my_tables[runround]:
             finished = len(table())
@@ -70,7 +72,7 @@ def populatemytables(paralel = True, cores = 9, all_rounds = range(len(my_tables
     print('--- Run with single core...')
     for runround in all_rounds:
         print('   round '+str(runround)+'')
-        arguments = {'display_progress' : True, 'reserve_jobs' : True, 'order': 'random'}
+        arguments = {'display_progress' : True, 'reserve_jobs' : False, 'order': 'random'}
         populatemytables_core(arguments, runround)
         
     # Show progress

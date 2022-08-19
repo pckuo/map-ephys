@@ -14,6 +14,7 @@ import pandas as pd
 import decimal
 import warnings
 import datajoint as dj
+import json
 
 from pybpodgui_api.models.project import Project as BPodProject
 from . import InvalidBehaviorTrialError
@@ -396,6 +397,15 @@ class BehaviorBpodIngest(dj.Imported):
             projects.append(BPodProject())
             projects[-1].load(projectdir)
         return projects
+    
+    @staticmethod
+    def _get_message(df, MSG):
+        """
+        Get message from df_behavior_trial
+        Locate the row of 'MSG' and return the next content in the next row
+        """
+        return df.loc[df.index[df['MSG'].str.contains(MSG)] + 1, 'MSG']
+
 
     @property
     def key_source(self):
@@ -474,6 +484,7 @@ class BehaviorBpodIngest(dj.Imported):
         subject_now = (lab.WaterRestriction() & {'subject_id': subject_id_now}).fetch1(
             'water_restriction_number')
         date_now_str = key['session_date'].strftime('%Y%m%d')
+                        
         log.info('h2o: {h2o}, date: {d}'.format(h2o=subject_now, d=date_now_str))
 
         # ---- Ingest information for BPod projects ----
@@ -503,7 +514,8 @@ class BehaviorBpodIngest(dj.Imported):
                          'trial_choice', 'trial_event', 'action_event',
                          'photostim', 'photostim_location', 'photostim_trial',
                          'photostim_trial_event',
-                         'valve_setting', 'valve_open_dur', 'available_reward')
+                         'valve_setting', 'valve_open_dur', 'available_reward',
+                         'photostim_foraging_trial')
 
         # getting started
         concat_rows = {k: list() for k in tbls_2_insert}
@@ -525,6 +537,7 @@ class BehaviorBpodIngest(dj.Imported):
             # It must have at least one 'trial start' and 'trial end'
             trial_start_idxs = df_behavior_session[(df_behavior_session['TYPE'] == 'TRIAL') & (
                         df_behavior_session['MSG'] == 'New trial')].index
+            
             if not len(trial_start_idxs):
                 log.info('No "trial start" for {}. Skipping...'.format(csvfilename))
                 continue  # Make sure 'start' exists, otherwise move on to try the next bpodsess file if exists
@@ -558,16 +571,16 @@ class BehaviorBpodIngest(dj.Imported):
                 session_time = df_behavior_session['PC-TIME'][trial_start_idxs[0]]
                 if session.setup_name.lower() in ['day1', 'tower-2', 'day2-7', 'day_1',
                                                   'real foraging']:
-                    setupname = 'AIND-Tower-2'   # 'Training-Tower-2'
+                    setupname = 'AIND-Tower-2' if key['session_date'] > date(2022, 1, 1) else 'Training-Tower-2'
                 elif session.setup_name.lower() in ['tower-3', 'tower-3beh', ' tower-3', '+',
                                                     'tower 3']:
-                    setupname = 'AIND-Tower-3'   # 'Training-Tower-3'
+                    setupname = 'AIND-Tower-3' if key['session_date'] > date(2022, 1, 1) else 'Training-Tower-3'
                 elif session.setup_name.lower() in ['tower-1']:
-                    setupname = 'AIND-Tower-1'  #'Training-Tower-1'
+                    setupname = 'AIND-Tower-1' if key['session_date'] > date(2022, 1, 1) else 'Training-Tower-1'
                 elif session.setup_name.lower() in ['tower-4']:
                     setupname = 'Training-Tower-4'
                 elif session.setup_name.lower() in ['ephys_han']:
-                    setupname = 'AIND-Ephys-Han'  # 'Ephys-Han'
+                    setupname = 'AIND-Ephys-Han' if key['session_date'] > date(2022, 1, 1) else 'Ephys-Han'
                 else:
                     log.info('ERROR: unhandled setup name {} (from {}). Skipping...'.format(
                         session.setup_name, session.path))
@@ -609,14 +622,21 @@ class BehaviorBpodIngest(dj.Imported):
 
             # extracting trial data
             session_start_time = datetime.combine(sess_key['session_date'], sess_key['session_time'])
-            trial_start_idxs = df_behavior_session[(df_behavior_session['TYPE'] == 'TRIAL') & (df_behavior_session['MSG'] == 'New trial')].index
-            trial_start_idxs -= 2 # To reflect the change that bitcode is moved before the "New trial" line
+            
+            if sess_key['session_date'] > date(2021, 5, 23):
+                # starting from https://github.com/hanhou/Foraging-Pybpod/commit/775dff4435a8c9b8ad14501f0b44de741d683737
+                trial_start_idxs = df_behavior_session[(df_behavior_session['TYPE'] == 'stdout') & (df_behavior_session['MSG'] == 'Blocknumber:')].index
+            else:
+                trial_start_idxs = df_behavior_session[(df_behavior_session['TYPE'] == 'TRIAL') & (df_behavior_session['MSG'] == 'New trial')].index
+                trial_start_idxs -= 2 # To reflect the change that bitcode is moved before the "New trial" line
+            
             trial_start_idxs = pd.Index([0]).append(trial_start_idxs[1:])  # so the random seed will be present
             trial_end_idxs = trial_start_idxs[1:].append(pd.Index([(max(df_behavior_session.index))]))
 
             # trial_end_idxs = df_behavior_session[(df_behavior_session['TYPE'] == 'END-TRIAL')].index
             prevtrialstarttime = np.nan
             blocknum_local_prev = np.nan
+            last_iti_after_on_PC_time, last_iti_after_down_PC_time, last_iti_after_off_PC_time = None, None, None
 
             # getting ready
             rows = {k: list() for k in
@@ -708,6 +728,7 @@ class BehaviorBpodIngest(dj.Imported):
                 #       (2) `trial_start_idx` in this for loop = the start of bpod-trial ('New Trial' in bpod csv file)
                 #            = the reference point of BPOD-TIME  = NIDQ bpod-trial channel
                 #    They are far from each other because I start the bpod trial at the middle of ITI (Foraging_bpod: e9a8ffd6) to cover video recording during ITI.
+                #    --> Update: now I move the bpod trial at the end of the last trial!! (ITI after = 0), starting from Foraging_bpod: f86af9e901, 2022-05-15
                 # 3. In theory, *bitcodestart* = *delay* (since there's no sample period),
                 #    but in practice, the bitcode (21*20=420 ms) and lickport movement (~100 ms) also take some time.
                 #    Note that bpod doesn't know the exact time when lickports are in place, so we can get *delay* only from NIDQ zaber channel (ephys.TrialEvent.'zaberinposition').
@@ -720,7 +741,7 @@ class BehaviorBpodIngest(dj.Imported):
                 #           the same events from pybpod.csv and bitcode.mat across all trials, e.g., *bitcodestart* <--> *sTrig*, or 0 <--> NIDQ bpod-"trial trigger" channel
                 #    Note that one should NEVER use PC-TIME from the bpod csv files (at least for ephys-related alignment)!!!
                 
-                # ----- BPOD STATES (all events except licks) -----
+                # ----- BPOD STATES (all events except licks and photostim) -----
                 bpod_states_this_trial = df_behavior_trial[(df_behavior_trial['TYPE'] == 'STATE') & (df_behavior_trial['BPOD-INITIAL-TIME'] > 0)]   # All states of this trial
                 trial_event_count = 0
 
@@ -762,7 +783,171 @@ class BehaviorBpodIngest(dj.Imported):
                     # save gocue time for early-lick below
                     if trial_event_type == 'go':
                         gocue_time = initials[0]
+                        
+                # ------ Photostim info from csv (sorry for this very complicated logic to capture different versions of bpod protocol...) -------
+                # Act as a master switch:
+                laser_power_txt = self._get_message(df_behavior_trial, 'laser power')
+                
+                # if_laser_this_trial = len(laser_power_txt) # TODO make this compatible before 2021-08-25 
+                timer4_start = df_behavior_trial.index[df_behavior_trial['+INFO'] == 'GlobalTimer4_Start']
+                timer5_start = df_behavior_trial.index[df_behavior_trial['+INFO'] == 'GlobalTimer5_Start']
+                photostim_event_id = 0
+                
+                if len(timer4_start) or len(timer5_start):
+                    # Retrieve laser power
+                    laser_power_list = json.loads(laser_power_txt.iloc[0])  # Assuming both sides have the same power (calibrated)
+                    if len(laser_power_list) == 3:
+                        laser_power = laser_power_list[0]  # Calibrated laser power
+                    elif len(laser_power_list) == 2:   # Use post-hoc calibration
+                        laser_cali =  np.array([
+                            [0.5, 0.14, 0.08],
+                            [1.0, 0.25, 0.15],
+                            [2.5, 0.75, 0.55],
+                            [5.0, 1.5, 1.1],
+                            [7.5, 2.2, 1.65],
+                            [10.0, 2.95, 2.25],
+                            [13.5, 4.8, 3.7]     
+                        ])
+                        p = laser_cali[:, 0]
+                        v = np.mean(laser_cali[:, 1:], axis=1) 
+                        laser_power = np.interp(laser_power_list[1], v, p)   # Approximated power
+                        
+                    # Retrieve WavePlayer events
+                    side_event_mapping = {'L': ['WavePlayer1_2', 'WavePlayer1_6'], 'R': ['WavePlayer1_4', 'WavePlayer1_6']}
+                    stim_sides = ''
+                    time_saved = False
+                    
+                    for side, event in side_event_mapping.items():
+                        wavplayer_rows = df_behavior_trial.loc[df_behavior_trial['+INFO'].isin(event), 'BPOD-INITIAL-TIME']
+                        
+                        if len(wavplayer_rows): # laser on, laser down, laser off
+                            stim_sides += side
 
+                            if not time_saved:  # Only save time once (here we assume if both sides are stimulated, they are in sync)
+                                time_saved = True
+                                
+                                # Decode on_bpod_time, down_bpod_time, and off_bpod_time of this *Photostim* trial (not bpod trial for the old protocol)
+                                if key['session_date'] >= date(2022, 5, 15):  # New protocol: bpod trial starts at the end of the last trial
+                                    timer4_start_bpod_time = df_behavior_trial.loc[timer4_start, 'BPOD-INITIAL-TIME']
+                                    if len(wavplayer_rows) == 2:   
+                                        if wavplayer_rows.iloc[1] - timer4_start_bpod_time.iloc[0] > 0.001:  # To capture the bug of missing first 'WavePlayer1_x' after timer4_start
+                                            wavplayer_rows = timer4_start_bpod_time.append(wavplayer_rows)  # Insert the fake first `WavePlayer1_x` using timer4_start
+                                            log.info(f"Warning: , len({event}) = 2 @ {subject_now}, session {key['session']}, trial {trial_num}. Fixed!")
+                                        else:
+                                            log.info(f"Warning: , len({event}) = 2 @ {subject_now}, session {key['session']}, trial {trial_num}. Cannot fix!")
+                                            breakpoint()
+                                    elif len(wavplayer_rows) == 1:  # In case where photostim starts after go cue and terminates at the end of the trial (no active stop or ramping down)
+                                        if wavplayer_rows.iloc[0] - timer4_start_bpod_time.iloc[0] < 0.001:  # The only `WavePlayer` event should be very close to TimerStart
+                                            trial_end = df_behavior_trial.loc[df_behavior_trial['MSG'] == 'End', 'BPOD-INITIAL-TIME'].iloc[0]
+                                            wavplayer_rows = wavplayer_rows.append(pd.Series([trial_end, trial_end]))  # photosim terminates at trial end; no ramping down
+                                        else:
+                                            log.info(f"Warning: , len({event}) = 1 @ {subject_now}, session {key['session']}, trial {trial_num}. Cannot fix!")
+                                            breakpoint()
+                                    on_bpod_time, down_bpod_time, off_bpod_time = wavplayer_rows.iloc[0:3]
+
+                                elif key['session_date'] < date(2022, 5, 15):  # Old protocol: bpod trial starts at the middle of ITI
+                                    this_bpod_start_PC_time = df_behavior_trial.loc[df_behavior_trial['MSG'] == 'New trial', 'PC-TIME']
+
+                                    if len(timer4_start):   # The first three event_row should be this ITI before
+                                        if len(wavplayer_rows) < 3: 
+                                            print(f'Warning: has timer4 but len(waveplayer_row) < 3!!')
+                                            breakpoint()
+                                            continue
+                                        if (last_iti_after_on_PC_time is not None and
+                                            last_iti_after_off_PC_time is None and
+                                            wavplayer_rows.iloc[0] < 0.001):  
+                                            # laser of the last bpod trial extends to the start of this bpod trial!
+                                            on_bpod_time = (last_iti_after_on_PC_time.iloc[0] - this_bpod_start_PC_time.iloc[0]).total_seconds()
+                                        else:
+                                            on_bpod_time = wavplayer_rows.iloc[0]
+                                        down_bpod_time, off_bpod_time = wavplayer_rows.iloc[1], wavplayer_rows.iloc[2] # This should be always true
+                                        
+                                    if not len(timer4_start) and last_iti_after_on_PC_time is not None:  # Only "ITI after" (first half ITI) is stimulated
+                                        on_bpod_time =   (last_iti_after_on_PC_time.iloc[0] - this_bpod_start_PC_time.iloc[0]).total_seconds()
+                                        if last_iti_after_off_PC_time is not None:   # ramping down in the last bpod trial
+                                            down_bpod_time = (last_iti_after_down_PC_time - this_bpod_start_PC_time.iloc[0]).total_seconds()
+                                            off_bpod_time =  (last_iti_after_off_PC_time - this_bpod_start_PC_time.iloc[0]).total_seconds()
+                                        else:  # No ramping down, hard stop at the start of this trial
+                                            down_bpod_time, off_bpod_time = 0, 0
+                                            
+                                    # Cache for the next photostim trial. This is based on PC-time (less accurate than bpod time)
+                                    # So far, ignore the case where there is a gap in the middle of ITI... (which should be very rare)
+                                    if len(timer5_start):
+                                        wavplayer_after_timer5 = wavplayer_rows[wavplayer_rows > df_behavior_trial.loc[timer5_start, 'BPOD-INITIAL-TIME'].values[0]]
+                                        last_iti_after_on_PC_time = df_behavior_trial.loc[timer5_start, 'PC-TIME']
+
+                                        if len(wavplayer_after_timer5) == 1:   # This ITIafter, laser ends until trial end (no ramping down)
+                                            last_iti_after_down_PC_time = None
+                                            last_iti_after_off_PC_time = None
+                                        elif len(wavplayer_after_timer5) == 3:   # In this ITIafter, laser ends before trial end (ramping down; if timer4_start in next trial, ignored this ITI after)
+                                            last_iti_after_down_PC_time = df_behavior_trial.loc[wavplayer_after_timer5.index[1], 'PC-TIME']
+                                            last_iti_after_off_PC_time  = df_behavior_trial.loc[wavplayer_after_timer5.index[2], 'PC-TIME']
+                                        else:
+                                            print(f'ERROR: has timer5 but len(waveplayer_row after timer 5) is not 1 or 3!!')
+                                            breakpoint()
+                                    else:
+                                        last_iti_after_on_PC_time = None
+                                        last_iti_after_down_PC_time = None
+                                        last_iti_after_off_PC_time = None
+                                        
+                                # Compute time to go cue
+                                on_to_go_cue = on_bpod_time - gocue_time
+                                off_to_go_cue = off_bpod_time - gocue_time
+                                duration = off_to_go_cue - on_to_go_cue
+                                ramping_down = round(off_bpod_time - down_bpod_time, 2)  # To the precision of 10 ms 
+                                
+                            # Fill in TrialEventTypes: 'laserLon', 'laserLdown', 'laserLoff', 'laserRon', 'laserRdown', 'laserRoff'
+                            for bpod_time, suffix in zip([on_bpod_time, down_bpod_time, off_bpod_time], ['on', 'down', 'off']):
+                                rows['trial_event'].extend(
+                                    [{**sess_trial_key,
+                                    'trial_event_id': trial_event_count,
+                                    'trial_event_type': f'laser{side}{suffix}',
+                                    'trial_event_time': bpod_time,
+                                    'duration': 0}])
+                                trial_event_count += 1
+                                                                
+                    # For experiment.PhotostimForaging
+                    if stim_sides == '': 
+                        log.info(f"WARNING: stim_sides = '' @ {subject_now}, session {key['session']}, trial {trial_num}!")
+                        continue
+                    
+                    side_code = {'L': 0, 'R': 1, 'LR': 2, 'RL': 2}[stim_sides]
+                    this_row = {**sess_trial_key,
+                                'photostim_event_id': photostim_event_id,  # dummy for now. just in case there are multiple laser events for one trial
+                                'side': side_code,
+                                'power': laser_power,
+                                'on_to_go_cue': on_to_go_cue,
+                                'off_to_go_cue': off_to_go_cue,
+                                'duration': duration,
+                                'ramping_down': ramping_down,
+                                }
+                    photostim_event_id += 1   
+                    
+                    # Nullables and sanity checks
+                    align_to_from_stdout = self._get_message(df_behavior_trial, 'laser aligned to')
+                    if len(align_to_from_stdout):
+                        this_row['bpod_timer_align_to'] = align_to_from_stdout.values[0].lower()
+                        
+                    timer_offset_from_stdout = self._get_message(df_behavior_trial, 'laser timer offset')
+                    if len(timer_offset_from_stdout):
+                        tmp = json.loads(timer_offset_from_stdout.iloc[0])
+                        this_row['bpod_timer_offset'] = tmp[0] if isinstance(tmp, list) else tmp
+
+                    side_code_from_stdout = self._get_message(df_behavior_trial, 'laser side')
+                    if len(side_code_from_stdout):
+                        assert side_code == side_code_from_stdout.astype(int).iloc[0], 'ERROR: stim_sides from WavePlayer != side from stdout message'
+                        
+                    ramping_down_from_stdout = self._get_message(df_behavior_session, 'laser ramping down')
+                    if len(ramping_down_from_stdout):
+                        assert ramping_down == float(ramping_down_from_stdout.iloc[0]), 'ERROR: ramping down not consistent!!'
+                    
+                    rows['photostim_foraging_trial'].extend([this_row])
+                
+                else:  # if not (len(timer4_start) or len(timer5_start)):
+                    # Set last trial laser to None to avoid wrongly decoded very long last ITI laser start
+                    # (Last photostim trial in the old protocol is only "first half ITI stim", which is ignored here...)
+                    last_iti_after_on_PC_time, last_iti_after_down_PC_time, last_iti_after_off_PC_time = None, None, None
+                    
                 # ------ Licks (use EVENT instead of STATE because not all licks triggered a state change) -------
                 lick_times = {}
                 for lick_port in lick_ports:
@@ -922,6 +1107,9 @@ class BehaviorBpodIngest(dj.Imported):
 
         log.info('BehaviorIngest.make(): ... experiment.TrialEvent')
         experiment.TrialEvent.insert(concat_rows['trial_event'], **insert_settings)
+        
+        log.info('BehaviorIngest.make(): ... experiment.PhotostimForagingTrial')
+        experiment.PhotostimForagingTrial.insert(concat_rows['photostim_foraging_trial'], **insert_settings)
 
         log.info('BehaviorIngest.make(): ... experiment.ActionEvent')
         experiment.ActionEvent.insert(concat_rows['action_event'], **insert_settings)
@@ -1598,3 +1786,4 @@ def load_multi_target_licking_matfile(skey, matlab_filepath):
         # end of trial loop.
 
     return rows
+
