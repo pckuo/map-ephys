@@ -1,12 +1,12 @@
 import datajoint as dj
 import numpy as np
 
-from . import lab, experiment, ccf, ephys, get_schema_name
+from . import lab, experiment, ccf, ephys, get_schema_name, create_schema_settings
 from pipeline.plot import unit_characteristic_plot
 
 [lab, experiment, ccf, ephys]  # schema imports only
 
-schema = dj.schema(get_schema_name('histology'))
+schema = dj.schema(get_schema_name('histology'), **create_schema_settings)
 
 
 @schema
@@ -130,8 +130,6 @@ class InterpolatedShankTrack(dj.Computed):
         -> ccf.CCF  
         """
 
-    key_source= ElectrodeCCFPosition & LabeledProbeTrack.Point
-    
     def make(self, key):
         probe_insertion = ephys.ProbeInsertion & key
 
@@ -261,7 +259,10 @@ def retrieve_pseudocoronal_slice(probe_insertion, shank_no=1):
     probe_track_coords = np.array(list(zip(*(LabeledProbeTrack.Point
                                              & probe_insertion & {'shank': shank_no}).fetch(
         'ccf_z', 'ccf_y', 'ccf_x', order_by='ccf_y'))))
-    coords = np.vstack([electrode_coords, probe_track_coords])
+    if len(probe_track_coords):
+        coords = np.vstack([electrode_coords, probe_track_coords])
+    else:
+        coords = electrode_coords
 
     # ---- linear fit of probe in DV-AP axis ----
     X = np.asmatrix(np.hstack((np.ones((coords.shape[0], 1)), coords[:, 1][:, np.newaxis])))  # DV

@@ -4,9 +4,9 @@ import numpy as np
 import pathlib
 
 from . import lab, ccf
-from . import get_schema_name
+from . import get_schema_name, create_schema_settings
 
-schema = dj.schema(get_schema_name('experiment'))
+schema = dj.schema(get_schema_name('experiment'), **create_schema_settings)
 
 ephys = dj.create_virtual_module('ephys', get_schema_name('ephys'))  # avoid circular dependency
 
@@ -288,6 +288,7 @@ class TrialEventType(dj.Lookup):
     """
     contents = zip(('delay', 'go', 'sample', 'presample', 'trialend',
                     'videostart', 'videoend', 'bitcodestart', 'choice', 'reward', 'doubledip',   # Added for foraging
+                    'laserLon', 'laserLdown', 'laserLoff', 'laserRon', 'laserRdown', 'laserRoff',   # Foraging photostim from csv file
                     'bpodstart', 'zaberstep', 'zaberready', 'laserL', 'laserR'    # Events only available from NIDQ channels
                     ))
 
@@ -498,6 +499,46 @@ class PassivePhotostimTrial(dj.Computed):
 
 # ----
 
+# ----- Photostim for foraging -----
+@schema
+class PhotostimForagingAlignTo(dj.Lookup):
+    """
+    corresponding to 'laser_align_to' in pybpod protocol
+    """
+    
+    definition = """
+    bpod_timer_align_to:  varchar(30)
+    """
+    
+    contents = [('after iti start',), ('before go cue',), ('after go cue',)]
+    
+@schema
+class PhotostimForagingTrial(dj.Imported):
+    """
+    Photostim events ingested from bpod
+    
+    For the foraging task, a trial N is "photostimulated" if there is a Laser ON event
+    after the end of trial N-1 and before the end of trial N, i.e., the previous ITI + current trial.
+    
+    Note that, by contrast, in ephys and latent variable, trial number is defined as
+        behavior & ephys:   -->  ITI(t-1) --> |  --> choice (t), reward(t)         --> ITI (t) -->       |
+        
+    All local time is related to the go cue for now (the most important time marker)
+    """
+    
+    definition = """
+    -> SessionTrial
+    photostim_event_id: smallint   # Same as PhotostimEvent (just in case there is one-to-many mapping)
+    ---
+    side: smallint                  # 0: Left only, 1: Right only, 2: Bilateral
+    power:    decimal(8, 3)         # (mW) measured power of the sinusoid wave
+    on_to_go_cue: decimal(8, 4)     # (s) from go cue of this trial
+    off_to_go_cue: decimal(8, 4)    # (s) from go cue of this trial
+    duration:  decimal(8, 4)
+    ramping_down:  decimal(8, 4)    # (s) ramping down duration
+    -> [nullable] PhotostimForagingAlignTo     # From bpod protocol
+    bpod_timer_offset=null:  decimal(8, 4)       # From bpod protocol
+    """    
 
 @schema
 class Period(dj.Lookup):

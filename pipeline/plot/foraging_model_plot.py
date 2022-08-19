@@ -213,7 +213,7 @@ def plot_session_lightweight(data, fitted_data=None, smooth_factor=5, base_color
 
         # Ignored trials
         ax.plot(np.nonzero(ignored_trials)[0], [1.1] * sum(ignored_trials),
-                'x', color='red', markersize=2, markeredgewidth=0.5)
+                'x', color='red', markersize=2, markeredgewidth=0.5, label='ignored')
 
         # Base probability
         ax.plot(np.arange(0, n_trials), p_reward_fraction, color=base_color, label='base rew. prob.', lw=1.5)
@@ -235,7 +235,7 @@ def plot_session_lightweight(data, fitted_data=None, smooth_factor=5, base_color
         # fig.tight_layout()
         sns.despine(trim=True)
 
-    return ax
+    return fig, ax
 
 
 # ---- Helper funcs -----

@@ -11,6 +11,9 @@ if 'custom' not in dj.config:
     dj.config['custom'] = {}
 
 
+create_schema_settings = dict(create_schema=False, create_tables=True)
+
+
 def get_schema_name(name):
     try:
         return dj.config['custom']['{}.database'.format(name)]

@@ -7,12 +7,12 @@ from scipy.stats import poisson
 import logging
 
 from . import lab, experiment, ccf
-from . import get_schema_name
+from . import get_schema_name, create_schema_settings
 from pipeline.ingest.utils.paths import get_sess_dir, gen_probe_insert, match_probe_to_ephys
 from pipeline.ingest.utils.spike_sorter_loader import cluster_loader_map
 
 
-schema = dj.schema(get_schema_name('ephys'))
+schema = dj.schema(get_schema_name('ephys'), **create_schema_settings)
 [lab, experiment, ccf]  # NOQA flake8
 
 log = logging.getLogger(__name__)
@@ -661,11 +661,23 @@ class MAPClusterMetric(dj.Computed):
 
     def make(self, key):
         # -- get trial-spikes - use only trials in ProbeInsertionQuality.GoodTrial
-        trial_spikes, trial_durations = (
+        #    if ProbeInsertionQuality exists but no ProbeInsertionQuality.GoodTrial,
+        #    then all trials are considered good trials
+        if (ProbeInsertionQuality & key) and (ProbeInsertionQuality.GoodTrial & key):
+            trial_spikes_query = (
                 Unit.TrialSpikes
                 * (experiment.TrialEvent & 'trial_event_type = "trialend"')
                 & ProbeInsertionQuality.GoodTrial
-                & key).fetch('spike_times', 'trial_event_time', order_by='trial')
+                & key)
+        else:
+            trial_spikes_query = (
+                Unit.TrialSpikes
+                * (experiment.TrialEvent & 'trial_event_type = "trialend"')
+                & key)
+
+        trial_spikes, trial_durations = trial_spikes_query.fetch(
+            'spike_times', 'trial_event_time', order_by='trial')
+
         # -- compute trial spike-rates
         trial_spike_rates = [len(s) for s in trial_spikes] / trial_durations.astype(float)  # spikes/sec
         mean_spike_rate = np.mean(trial_spike_rates)
