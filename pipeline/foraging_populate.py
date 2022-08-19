@@ -39,14 +39,18 @@ def populatemytables_core(arguments, runround):
         table.populate(**arguments)
         
 def show_progress(rounds):
-    print('\n--- Current progress ---')
-    print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    print('\n--- Current progress ---', flush=True)
+    print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), flush=True)
     for runround in rounds:
         for table in my_tables[runround]:
-            finished = len(table())
-            total = len(table.key_source)
-            print(f'{table.__name__}: {finished} / {total} = {finished / total:.3%}, to do: {total - finished}')
-    print('------------------------\n')
+            finished_in_current_key_source = len(table & table.key_source.proj())
+            total_in_current_key_source = len(table.key_source.proj())
+            print(f'{table.__name__}: '
+                  f'{finished_in_current_key_source} / {total_in_current_key_source} = '
+                  f'{finished_in_current_key_source / total_in_current_key_source:.3%},'
+                  f'to do: {total_in_current_key_source - finished_in_current_key_source}',
+                  flush=True)
+    print('------------------------\n', flush=True)
         
 def populatemytables(paralel = True, cores = 9, all_rounds = range(len(my_tables))):
     show_progress(all_rounds)
