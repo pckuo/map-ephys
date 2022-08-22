@@ -180,7 +180,7 @@ def plot_session_fitted_choice(sess_key={'subject_id': 473361, 'session': 47},
     return ax
 
 
-def plot_session_lightweight(data, fitted_data=None, smooth_factor=5, base_color='y', ax=None):
+def plot_session_lightweight(data, fitted_data=None, smooth_factor=5, base_color='y', ax=None, vertical=False):
     # sns.reset_orig()
 
     with sns.plotting_context("notebook", font_scale=1):
@@ -197,39 +197,55 @@ def plot_session_lightweight(data, fitted_data=None, smooth_factor=5, base_color
         unrewarded_trials = np.logical_not(np.logical_or(rewarded_trials, ignored_trials))
 
         # == Choice trace ==
-        fig = plt.figure(figsize=(8, 3), dpi=200)
-
-        if ax is None:
+        fig = None
+        if ax is None:  
+            fig = plt.figure(figsize=(8, 3), dpi=200)
             ax = fig.add_subplot(111)
             fig.subplots_adjust(left=0.1, right=0.8, bottom=0.05, top=0.7)
 
         # Rewarded trials
-        ax.plot(np.nonzero(rewarded_trials)[0], 0.5 + (choice_history[0, rewarded_trials] - 0.5) * 1.4,
-                '|', color='black', markersize=10, markeredgewidth=2)
+        xx = np.nonzero(rewarded_trials)[0]
+        yy = 0.5 + (choice_history[0, rewarded_trials] - 0.5) * 1.4
+        ax.plot(*(xx, yy) if not vertical else [*(yy, xx)], 
+                '_', color='black', markersize=10, markeredgewidth=2)
 
         # Unrewarded trials
-        ax.plot(np.nonzero(unrewarded_trials)[0], 0.5 + (choice_history[0, unrewarded_trials] - 0.5) * 1.4,
-                '|', color='gray', markersize=6, markeredgewidth=1)
+        xx = np.nonzero(unrewarded_trials)[0]
+        yy = 0.5 + (choice_history[0, unrewarded_trials] - 0.5) * 1.4
+        ax.plot(*(xx, yy) if not vertical else [*(yy, xx)],
+                '_', color='gray', markersize=6, markeredgewidth=1)
 
         # Ignored trials
-        ax.plot(np.nonzero(ignored_trials)[0], [1.1] * sum(ignored_trials),
+        xx = np.nonzero(ignored_trials)[0]
+        yy = [1.1] * sum(ignored_trials)
+        ax.plot(*(xx, yy) if not vertical else [*(yy, xx)],
                 'x', color='red', markersize=2, markeredgewidth=0.5, label='ignored')
 
         # Base probability
-        ax.plot(np.arange(0, n_trials), p_reward_fraction, color=base_color, label='base rew. prob.', lw=1.5)
+        xx = np.arange(0, n_trials)
+        yy = p_reward_fraction
+        ax.plot(*(xx, yy) if not vertical else [*(yy, xx)],
+                color=base_color, label='base rew. prob.', lw=1.5)
 
         # Smoothed choice history
         y = moving_average(choice_history, smooth_factor)
         x = np.arange(0, len(y)) + int(smooth_factor / 2)
-        ax.plot(x, y, linewidth=1.5, color='black', label='choice (smooth = %g)' % smooth_factor)
+        ax.plot(*(x, y) if not vertical else [*(y, x)],
+                linewidth=1.5, color='black', label='choice (smooth = %g)' % smooth_factor)
 
         # For each session, if any
         if fitted_data is not None:
             ax.plot(np.arange(0, n_trials), fitted_data[1, :], linewidth=1.5, label='model')
 
         ax.legend(fontsize=5, loc='upper left', bbox_to_anchor=(1, 1.3))
-        ax.set_yticks([0, 1])
-        ax.set_yticklabels(['Left', 'Right'])
+        
+        if not vertical:
+            ax.set_yticks([0, 1])
+            ax.set_yticklabels(['Left', 'Right'])
+        else:
+            ax.set_xticks([0, 1])
+            ax.set_xticklabels(['Left', 'Right'])
+        
         # ax.set_xlim(0,300)
 
         # fig.tight_layout()
