@@ -7,12 +7,12 @@ from scipy.stats import poisson
 import logging
 
 from . import lab, experiment, ccf
-from . import get_schema_name
+from . import get_schema_name, create_schema_settings
 from pipeline.ingest.utils.paths import get_sess_dir, gen_probe_insert, match_probe_to_ephys
 from pipeline.ingest.utils.spike_sorter_loader import cluster_loader_map
 
 
-schema = dj.schema(get_schema_name('ephys'))
+schema = dj.schema(get_schema_name('ephys'), **create_schema_settings)
 [lab, experiment, ccf]  # NOQA flake8
 
 log = logging.getLogger(__name__)
@@ -157,6 +157,60 @@ class LFP(dj.Imported):
         ---
         lfp: longblob           # recorded lfp at this electrode
         """
+
+    def make(self, key):
+        from .ingest.utils.spike_sorter_loader import SpikeGLX
+
+        log.info('------ LFP ingestion for {} ------'.format(key))
+
+        session_key, h2o = (experiment.Session * lab.WaterRestriction & key).fetch1(
+            'KEY', 'water_restriction_number')
+
+        dpath, dglob, rigpath = get_sess_dir(session_key)
+
+        if dpath is None:
+            return
+
+        try:
+            clustering_files = match_probe_to_ephys(h2o, dpath, dglob)
+        except FileNotFoundError as e:
+            log.warning(str(e) + '. Skipping...')
+            return
+
+        probe_no = key['insertion_number']
+        f, cluster_method, npx_meta = clustering_files[probe_no]
+        spikeglx_recording = SpikeGLX(pathlib.Path(npx_meta.fname).parent)
+
+        electrode_keys, lfp = [], []
+
+        lfp_channel_ind = spikeglx_recording.lfmeta.recording_channels
+
+        # Extract LFP data at specified channels and convert to uV
+        lfp = spikeglx_recording.lf_timeseries[:, lfp_channel_ind]  # (sample x channel)
+        lfp = (lfp * spikeglx_recording.get_channel_bit_volts('lf')[lfp_channel_ind]).T  # (channel x sample)
+
+        self.insert1(dict(key,
+                          lfp_sample_rate=spikeglx_recording.lfmeta.meta['imSampRate'],
+                          lfp_time_stamps=(np.arange(lfp.shape[1])
+                                           / spikeglx_recording.lfmeta.meta['imSampRate']),
+                          lfp_mean=lfp.mean(axis=0)))
+
+        electrode_query = (lab.ProbeType.Electrode
+                           * lab.ElectrodeConfig.Electrode
+                           * ProbeInsertion & key)
+        probe_electrodes = {
+            (shank, shank_col, shank_row): key
+            for key, shank, shank_col, shank_row in zip(*electrode_query.fetch(
+                'KEY', 'shank', 'shank_col', 'shank_row'))}
+
+        for recorded_site in lfp_channel_ind:
+            shank, shank_col, shank_row, _ = spikeglx_recording.apmeta.shankmap['data'][recorded_site]
+            electrode_keys.append(probe_electrodes[(shank, shank_col, shank_row)])
+
+        # single insert in loop to mitigate potential memory issue
+        for electrode_key, lfp_trace in zip(electrode_keys, lfp):
+            self.Channel.insert1({**key, **electrode_key, 'lfp': lfp_trace})
+
 
 # ---- Clusters/Units/Spiketimes ----
 
@@ -542,7 +596,7 @@ class ClusterMetric(dj.Imported):
     cumulative_drift=null: float  # Cumulative change in spike depth throughout recording 
     """
 
-    key_source = ProbeInsertion & Unit
+    key_source = ProbeInsertion & Unit.proj()
 
     def make(self, key):
         from .ingest.ephys import ingest_metrics
@@ -607,11 +661,23 @@ class MAPClusterMetric(dj.Computed):
 
     def make(self, key):
         # -- get trial-spikes - use only trials in ProbeInsertionQuality.GoodTrial
-        trial_spikes, trial_durations = (
+        #    if ProbeInsertionQuality exists but no ProbeInsertionQuality.GoodTrial,
+        #    then all trials are considered good trials
+        if (ProbeInsertionQuality & key) and (ProbeInsertionQuality.GoodTrial & key):
+            trial_spikes_query = (
                 Unit.TrialSpikes
                 * (experiment.TrialEvent & 'trial_event_type = "trialend"')
                 & ProbeInsertionQuality.GoodTrial
-                & key).fetch('spike_times', 'trial_event_time', order_by='trial')
+                & key)
+        else:
+            trial_spikes_query = (
+                Unit.TrialSpikes
+                * (experiment.TrialEvent & 'trial_event_type = "trialend"')
+                & key)
+
+        trial_spikes, trial_durations = trial_spikes_query.fetch(
+            'spike_times', 'trial_event_time', order_by='trial')
+
         # -- compute trial spike-rates
         trial_spike_rates = [len(s) for s in trial_spikes] / trial_durations.astype(float)  # spikes/sec
         mean_spike_rate = np.mean(trial_spike_rates)

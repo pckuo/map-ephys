@@ -26,7 +26,7 @@ _plt_xmin = -3
 _plt_xmax = 2
 
 
-def plot_clustering_quality(probe_insertion, clustering_method=None, axs=None):
+def plot_clustering_quality(probe_insertion, clustering_method=None, axs=None, archived_clustering_key=None):
     probe_insertion = probe_insertion.proj()
 
     if clustering_method is None:
@@ -35,9 +35,16 @@ def plot_clustering_quality(probe_insertion, clustering_method=None, axs=None):
         except ValueError as e:
             raise ValueError(str(e) + '\nPlease specify one with the kwarg "clustering_method"')
 
-    amp, snr, spk_rate, isi_violation = (ephys.Unit * ephys.UnitStat * ephys.ProbeInsertion.InsertionLocation
-                                         & probe_insertion & {'clustering_method': clustering_method}).fetch(
-        'unit_amp', 'unit_snr', 'avg_firing_rate', 'isi_violation')
+    if archived_clustering_key:
+        amp, snr, spk_rate, isi_violation = (ephys.ArchivedClustering.Unit
+                                             * ephys.ArchivedClustering.UnitStat
+                                             * ephys.ProbeInsertion.InsertionLocation
+                                             & archived_clustering_key).fetch(
+            'unit_amp', 'unit_snr', 'avg_firing_rate', 'isi_violation')
+    else:
+        amp, snr, spk_rate, isi_violation = (ephys.Unit * ephys.UnitStat * ephys.ProbeInsertion.InsertionLocation
+                                             & probe_insertion & {'clustering_method': clustering_method}).fetch(
+            'unit_amp', 'unit_snr', 'avg_firing_rate', 'isi_violation')
 
     metrics = {'amp': amp,
                'snr': snr,
@@ -50,7 +57,7 @@ def plot_clustering_quality(probe_insertion, clustering_method=None, axs=None):
 
     fig = None
     if axs is None:
-        fig, axs = plt.subplots(2, 3, figsize = (12, 8))
+        fig, axs = plt.subplots(2, 3, figsize=(12, 8))
         fig.subplots_adjust(wspace=0.4)
 
     assert axs.size == 6
@@ -352,10 +359,13 @@ def plot_pseudocoronal_slice(probe_insertion, shank_no=1):
         coronal_slice[dv_ind, lr_ind, :] = np.full((len(matched_ind), 3), c_rgb)
 
     # ---- paint the interpolated track of this probe/shank in gray ----
-    in_probe_range = np.logical_and(shank_ccfs[:, 1] >= probe_track_coords[:, 1].min(),
-                                    shank_ccfs[:, 1] <= probe_track_coords[:, 1].max())
     in_electrode_range = np.logical_and(shank_ccfs[:, 1] >= electrode_coords[:, 1].min(),
                                         shank_ccfs[:, 1] <= electrode_coords[:, 1].max())
+    if len(probe_track_coords):
+        in_probe_range = np.logical_and(shank_ccfs[:, 1] >= probe_track_coords[:, 1].min(),
+                                        shank_ccfs[:, 1] <= probe_track_coords[:, 1].max())
+    else:
+        in_probe_range = np.full_like(in_electrode_range, True)
 
     tracks_coords = shank_ccfs[np.logical_and(in_probe_range, ~in_electrode_range), :]
     coronal_slice[tracks_coords[:, 1], tracks_coords[:, 0], :] = np.full(
@@ -387,7 +397,7 @@ def plot_pseudocoronal_slice(probe_insertion, shank_no=1):
     return fig
 
 
-def plot_driftmap(probe_insertion, clustering_method=None, shank_no=1):
+def plot_driftmap(probe_insertion, clustering_method=None, shank_no=1, archived_clustering_key=None):
     probe_insertion = probe_insertion.proj()
 
     assert histology.InterpolatedShankTrack & probe_insertion
@@ -398,12 +408,20 @@ def plot_driftmap(probe_insertion, clustering_method=None, shank_no=1):
         except ValueError as e:
             raise ValueError(str(e) + '\nPlease specify one with the kwarg "clustering_method"')
 
-    units = (ephys.Unit * lab.ElectrodeConfig.Electrode
-             & probe_insertion & {'clustering_method': clustering_method}
-             & 'unit_quality != "all"')
-    units = (units.proj('spike_times', 'spike_depths', 'unit_posy')
-             * ephys.ProbeInsertion.proj()
-             * lab.ProbeType.Electrode.proj('shank') & {'shank': shank_no})
+    if archived_clustering_key:
+        units = (ephys.ArchivedClustering.Unit * lab.ElectrodeConfig.Electrode
+                 & archived_clustering_key & {'clustering_method': archived_clustering_key['clustering_method']}
+                 & 'unit_quality != "all"')
+        units = (units.proj('spike_times', 'spike_depths', 'unit_posy')
+                 * ephys.ProbeInsertion.proj()
+                 * lab.ProbeType.Electrode.proj('shank') & {'shank': shank_no})
+    else:
+        units = (ephys.Unit * lab.ElectrodeConfig.Electrode
+                 & probe_insertion & {'clustering_method': clustering_method}
+                 & 'unit_quality != "all"')
+        units = (units.proj('spike_times', 'spike_depths', 'unit_posy')
+                 * ephys.ProbeInsertion.proj()
+                 * lab.ProbeType.Electrode.proj('shank') & {'shank': shank_no})
 
     # ---- ccf region ----
     annotated_electrodes = (lab.ElectrodeConfig.Electrode * lab.ProbeType.Electrode

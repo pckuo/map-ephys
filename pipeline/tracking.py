@@ -7,9 +7,9 @@ import datajoint as dj
 import numpy as np
 
 from . import experiment, lab
-from . import get_schema_name
+from . import get_schema_name, create_schema_settings
 
-schema = dj.schema(get_schema_name('tracking'))
+schema = dj.schema(get_schema_name('tracking'), **create_schema_settings)
 [experiment]  # NOQA flake8
 
 
@@ -71,6 +71,16 @@ class Tracking(dj.Imported):
         tongue_y:               longblob        # tongue y location (px)
         tongue_likelihood:      longblob        # tongue location likelihood
         """
+        
+    class TongueSideTracking(dj.Part):
+        definition = """
+        -> Tracking
+        side:               varchar(36)     # leftfront, rightfront, leftback, rightback, ...
+        ---
+        tongue_side_x:               longblob        # tongue x location (px)
+        tongue_side_y:               longblob        # tongue y location (px)
+        tongue_side_likelihood:      longblob        # tongue location likelihood
+        """
 
     class JawTracking(dj.Part):
         definition = """
@@ -126,7 +136,17 @@ class Tracking(dj.Imported):
                 'LeftPawTracking': Tracking.LeftPawTracking,
                 'RightPawTracking': Tracking.RightPawTracking,
                 'LickPortTracking': Tracking.LickPortTracking,
-                'WhiskerTracking': Tracking.WhiskerTracking}
+                'WhiskerTracking': Tracking.WhiskerTracking,
+                
+                # For foraging tracking
+                'nose': Tracking.NoseTracking,
+                'tongue': Tracking.TongueTracking,
+                'tongue_side': Tracking.TongueSideTracking,
+                'jaw': Tracking.JawTracking,
+                'left_paw': Tracking.LeftPawTracking,
+                'right_paw': Tracking.RightPawTracking,
+                'whisker': Tracking.WhiskerTracking,                
+                }
 
 
 @schema
