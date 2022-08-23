@@ -204,32 +204,32 @@ def plot_session_lightweight(data, fitted_data=None, smooth_factor=5, base_color
             fig.subplots_adjust(left=0.1, right=0.8, bottom=0.05, top=0.7)
 
         # Rewarded trials
-        xx = np.nonzero(rewarded_trials)[0]
+        xx = np.nonzero(rewarded_trials)[0] + 1
         yy = 0.5 + (choice_history[0, rewarded_trials] - 0.5) * 1.4
         ax.plot(*(xx, yy) if not vertical else [*(yy, xx)], 
                 '_', color='black', markersize=10, markeredgewidth=2)
 
         # Unrewarded trials
-        xx = np.nonzero(unrewarded_trials)[0]
+        xx = np.nonzero(unrewarded_trials)[0] + 1
         yy = 0.5 + (choice_history[0, unrewarded_trials] - 0.5) * 1.4
         ax.plot(*(xx, yy) if not vertical else [*(yy, xx)],
                 '_', color='gray', markersize=6, markeredgewidth=1)
 
         # Ignored trials
-        xx = np.nonzero(ignored_trials)[0]
+        xx = np.nonzero(ignored_trials)[0] + 1
         yy = [1.1] * sum(ignored_trials)
         ax.plot(*(xx, yy) if not vertical else [*(yy, xx)],
                 'x', color='red', markersize=2, markeredgewidth=0.5, label='ignored')
 
         # Base probability
-        xx = np.arange(0, n_trials)
+        xx = np.arange(0, n_trials) + 1
         yy = p_reward_fraction
         ax.plot(*(xx, yy) if not vertical else [*(yy, xx)],
                 color=base_color, label='base rew. prob.', lw=1.5)
 
         # Smoothed choice history
         y = moving_average(choice_history, smooth_factor)
-        x = np.arange(0, len(y)) + int(smooth_factor / 2)
+        x = np.arange(0, len(y)) + int(smooth_factor / 2) + 1
         ax.plot(*(x, y) if not vertical else [*(y, x)],
                 linewidth=1.5, color='black', label='choice (smooth = %g)' % smooth_factor)
 

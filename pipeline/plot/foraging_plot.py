@@ -765,14 +765,14 @@ def plot_session_trial_events(key_subject_id_session = dict(subject_id=472184, s
     #%%
     
 def plot_lick_psth(sess_key=dict(subject_id=616134, session=17),
-                   trial_event_to_align="go", other_trial_events={'laserLoff': 'cyan', 'laserLon': 'cyan'},
+                   trial_event_to_align="go", other_trial_events={'laserLoff': ('cyan', '<'), 'laserLon': ('cyan', '<')},
                    use_actual_trial_num=True
                    ):  # Plot all trial events of one specific session
     #%% 
-    sess_key = dict(subject_id=616134, session=19)
-    trial_event_to_align = "go"
-    other_trial_events = {'laserLoff': 'cyan', 'laserLon': 'cyan'}
-    use_actual_trial_num = False
+    # sess_key = dict(subject_id=616134, session=19)
+    # trial_event_to_align = "go"
+    # other_trial_events = {'laserLoff': 'cyan', 'laserLon': 'cyan'}
+    # use_actual_trial_num = False
     
     #--------------------------
     def _do_plot(all_licks_to_align, first_lick_after_align):
@@ -809,14 +809,21 @@ def plot_lick_psth(sess_key=dict(subject_id=616134, session=17),
         
         # -- Draw other events --
         for event_type in other_trial_events:
-            ax1.eventplot(lineoffsets=actual_trial_nums if use_actual_trial_num else all_trial_num, 
-                        positions=other_events_aligned[event_type],
-                        color=other_trial_events[event_type],
-                        linelength=1,
-                        linewidth=3)   # Trial start
+            if event_type not in other_events_aligned:
+                continue
+            ax1.scatter(y=actual_trial_nums if use_actual_trial_num else all_trial_num, 
+                            x=other_events_aligned[event_type],
+                            s=10,
+                            facecolors=other_trial_events[event_type][0], # if 'on' in event_type else "None",
+                            edgecolors='blue' if 'R' in event_type else 'red' if 'L' in event_type else 'face',
+                            marker=other_trial_events[event_type][1],
+                            label=event_type,
+                            alpha=0.4 if 'off' in event_type else 1,
+                            )   # Trial start
         
         ax1.plot([0, 0], ax1.get_ylim(), 'k', lw=0.5)   # Aligned by trial_event_to_align
-        ax1.set(xlim=(-2, 5), xticklabels=[], yticklabels=[])
+        ax1.set(xlim=(-2.5, 5), xticklabels=[], yticklabels=[])
+        ax1.legend()
 
         # sns.histplot(-align_to_times, binwidth=0.01, color='k', ax=ax2, label='trial start')  # 10-ms window
         ax2.axvline(x=0, color='k', lw=0.5)
@@ -841,16 +848,19 @@ def plot_lick_psth(sess_key=dict(subject_id=616134, session=17),
     
     # -- Get event times --
     q_valid_trials = experiment.BehaviorTrial.proj() & (experiment.TrialEvent & sess_key & f'trial_event_type="{trial_event_to_align}"')  # Only trials that have event_to_align
+    if len(q_valid_trials) == 0:
+        print(f'No trial_event_type="{trial_event_to_align}" trials')
+        return
     df_lick_with_align = pd.DataFrame((experiment.ActionEvent & q_valid_trials).fetch())
     
-    all_event_time = pd.DataFrame((experiment.TrialEvent & q_valid_trials & 'trial_event_type != "delay"').fetch()).pivot(
+    all_event_time = pd.DataFrame((experiment.TrialEvent & q_valid_trials & 'trial_event_type NOT IN ("delay", "doubledip")').fetch()).pivot(
         index='trial', columns='trial_event_type', values='trial_event_time')
         
     actual_trial_nums = all_event_time.index.get_level_values('trial')
     all_trial_num = np.arange(1, len(actual_trial_nums) + 1)
     
     # -- Get data from each trial --
-    all_licks_aligned, first_lick_aligned = defaultdict(list), defaultdict(list)
+    all_licks_aligned, first_lick_aligned, other_events_aligned = defaultdict(list), defaultdict(list), defaultdict(list)
     
     for actual_trial_num in actual_trial_nums:
         this_align_time = all_event_time.query(f'trial == {actual_trial_num}')[trial_event_to_align].values
@@ -864,11 +874,11 @@ def plot_lick_psth(sess_key=dict(subject_id=616134, session=17),
             first_lick_aligned[event_type].extend(first_lick_this)
         
     # Add trial event times
-    other_events_aligned = {}
     for event_type in other_trial_events:
-        other_events_aligned[event_type] = (all_event_time[event_type] - all_event_time[trial_event_to_align]).astype(float)
-        other_events_aligned[event_type] = [[] if np.isnan(x) else [x] for x in other_events_aligned[event_type]]
-            
+        if event_type not in all_event_time:
+            continue
+        this_times = (all_event_time[event_type] - all_event_time[trial_event_to_align]).astype(float)
+        other_events_aligned[event_type].extend(this_times)            
     
     _do_plot(all_licks_aligned, first_lick_aligned)
     plt.show()
