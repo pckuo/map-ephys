@@ -144,7 +144,7 @@ def plot_session_fitted_choice(sess_key={'subject_id': 473361, 'session': 47},
         
     # -- Plot actual choice and reward history --
     with sns.plotting_context("notebook", font_scale=1, rc={'style': 'ticks'}):
-        ax = plot_session_lightweight([choice_history, reward_history, p_reward], smooth_factor=smooth_factor, ax=ax)
+        fig, ax = plot_session_lightweight([choice_history, reward_history, p_reward], smooth_factor=smooth_factor, ax=ax)
 
         # -- Plot fitted choice probability etc. --
         model_str =  (f'Model comparison: {(foraging_model.ModelComparison & q_model_comparison).fetch1("desc")}'
