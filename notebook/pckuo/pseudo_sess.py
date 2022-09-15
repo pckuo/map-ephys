@@ -9,6 +9,7 @@ import seaborn as sns
 import statsmodels.api as sm
 import random
 
+import pickle
 import json
 json_open = open('../../dj_local_conf.json', 'r') 
 config = json.load(json_open)
@@ -198,6 +199,7 @@ def gen_qs_by_fitted_model(key, p_reward_trial, p_reward_block, block_lengths,
     return forager.q_estimation
 
 
+###############################################
 if __name__ == "__main__":
 
     # generate session action-reward sequence
@@ -286,8 +288,7 @@ if __name__ == "__main__":
             neurons = sim_neurons[neuron_type]
             df_ps_fit = df_ps_fit_dict[neuron_type]
             
-            #for n in range(len(neurons)):
-            for n in range(10):
+            for n in np.unique(neurons['neuron_id'].values).astype(np.int):
                 
                 # fit true sessions
                 df_Qs_session = df_Qs[df_Qs['session']==session].sort_values(by=['trial'])
@@ -313,5 +314,9 @@ if __name__ == "__main__":
             
         print(f'end of session {session}: {X.shape}')
 
-    sim_neurons.to_pickle('./sim_neurons')
-    df_ps_fit_dict.to_pickle('./df_ps_fit_dict')
+
+    with open('./sim_neurons.pickle', 'wb') as handle:
+        pickle.dump(sim_neurons, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    with open('./df_ps_fit_dict.pickle', 'wb') as handle:
+        pickle.dump(df_ps_fit_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
