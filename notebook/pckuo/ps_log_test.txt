@@ -1,0 +1,67 @@
+Connecting pochen@datajoint.mesoscale-activity-map.org:3306
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+end of neuron type Q_left
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+end of neuron type Q_right
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+end of neuron type sigma_Q
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+end of neuron type delta_Q
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+stating generating 0
+simulating forager
+stating generating 1
+simulating forager
+end of neuron type rw
+end of session 38: (468, 3)

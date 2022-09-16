@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
 
     # generate simulated neurons
-    n_neurons = 300
+    n_neurons = 500
     neuron_types = ['Q_left', 'Q_right', 'sigma_Q', 'delta_Q', 'rw']
 
     sim_neuron_columns = ['session', 'neuron_id', 'firing_rates']

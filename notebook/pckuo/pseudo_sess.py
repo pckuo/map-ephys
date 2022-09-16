@@ -134,8 +134,10 @@ def gen_p_reward_sequence(p_reward_trial, p_reward_block, block_lengths,
 
 
 def gen_qs_by_fitted_model(key, p_reward_trial, p_reward_block, block_lengths, 
-                           forager_type='LNP_softmax'):
+                           gen_type='random_block_struct', block_generator_spread=5, forager_type='LNP_softmax'):
     
+    # gen_type: ['random_block_struct', 'same_block_struct']
+
     # get fitted model
     model_para = pd.DataFrame((foraging_model.FittedSessionModel.Param & key).fetch())
     model_para_dict = {}
@@ -147,55 +149,68 @@ def gen_qs_by_fitted_model(key, p_reward_trial, p_reward_block, block_lengths,
     #for k, v in vars(forager).items():
     #    if v is not None:
     #        print(f'{k}: {v}')
+    if gen_type == 'random_block_struct':
+        block_length_avg = np.average(block_lengths)
+        block_length_std = np.std(block_lengths)
 
-    # generate reward sequence
-    p_reward_gen, block_lengths_gen = gen_p_reward_sequence(p_reward_trial, p_reward_block, block_lengths, plot=False)
-    forager.n_blocks = len(block_lengths)
-    forager.p_reward = p_reward_gen
-    forager.block_size = block_lengths_gen
-    forager.p_reward_fraction = p_reward_gen[1]/ np.sum(p_reward_gen, axis=0)
-    forager.p_reward_ratio = p_reward_gen[1]/ p_reward_gen[0]
-    #for k, v in vars(forager).items():
-    #    if v is not None:
-    #        print(f'{k}: {v}')
-
-    # generative mode
-    # Initialization
-    forager.time = 0
-
-    # All latent variables have n_trials + 1 length to capture the update after the last trial (HH20210726)
-    forager.q_estimation = np.full([forager.K, forager.n_trials+1], np.nan)
-    forager.q_estimation[:, 0] = 0
-
-    forager.choice_prob = np.full([forager.K, forager.n_trials+1], np.nan)
-    forager.choice_prob[:, 0] = 1/forager.K   # To be strict (actually no use)
-
-    forager.choice_history = np.zeros(
-                    [1, forager.n_trials+1], dtype=int)  # Choice history
-    # Reward history, separated for each port (Corrado Newsome 2005)
-    forager.reward_history = np.zeros([forager.K, forager.n_trials+1])
-
-    forager.reward_available = np.zeros([forager.K, forager.n_trials+1])
-    forager.reward_available[:, 0] = (np.random.uniform(0, 1, forager.K) < forager.p_reward[:, forager.time]).astype(int)
-
-    if forager.forager in ['LNP_softmax', 'LNP_softmax_CK']:
-        # Compute the history filter. Compatible with any number of taus.
-        # Use the full length of the session just in case of an extremely large tau.
-        reversed_t = np.flipud(np.arange(forager.n_trials+1))
-        forager.history_filter = np.zeros_like(reversed_t).astype('float64')
-        for tau, w_tau in zip(forager.taus, forager.w_taus):
-            # Note the normalization term (= tau when n -> inf.)
-            forager.history_filter += w_tau * \
-                                    np.exp(-reversed_t / tau) / \
-                                    np.sum(np.exp(-reversed_t / tau))
-
-    for t in range(forager.n_trials):
-        action = forager.act()
-        forager.step(action)
-    #for k, v in vars(forager).items():
-    #    if v is not None:
-    #        print(f'{k}: {v}')
+        forager.generate_p_reward(block_length_avg, block_length_std)
+        print('simulating forager')
+        forager.simulate()
     
+    
+    elif gen_type == 'same_block_struct':
+        # generate reward sequence
+        p_reward_gen, block_lengths_gen = gen_p_reward_sequence(p_reward_trial, p_reward_block, block_lengths, 
+                                                                block_generator_spread=block_generator_spread, plot=False)
+        forager.n_blocks = len(block_lengths)
+        forager.p_reward = p_reward_gen
+        forager.block_size = block_lengths_gen
+        forager.p_reward_fraction = p_reward_gen[1]/ np.sum(p_reward_gen, axis=0)
+        forager.p_reward_ratio = p_reward_gen[1]/ p_reward_gen[0]
+        #for k, v in vars(forager).items():
+        #    if v is not None:
+        #        print(f'{k}: {v}')
+
+        # generative mode
+        # Initialization
+        forager.time = 0
+
+        # All latent variables have n_trials + 1 length to capture the update after the last trial (HH20210726)
+        forager.q_estimation = np.full([forager.K, forager.n_trials+1], np.nan)
+        forager.q_estimation[:, 0] = 0
+
+        forager.choice_prob = np.full([forager.K, forager.n_trials+1], np.nan)
+        forager.choice_prob[:, 0] = 1/forager.K   # To be strict (actually no use)
+
+        forager.choice_history = np.zeros(
+                        [1, forager.n_trials+1], dtype=int)  # Choice history
+        # Reward history, separated for each port (Corrado Newsome 2005)
+        forager.reward_history = np.zeros([forager.K, forager.n_trials+1])
+
+        forager.reward_available = np.zeros([forager.K, forager.n_trials+1])
+        forager.reward_available[:, 0] = (np.random.uniform(0, 1, forager.K) < forager.p_reward[:, forager.time]).astype(int)
+
+        if forager.forager in ['LNP_softmax', 'LNP_softmax_CK']:
+            # Compute the history filter. Compatible with any number of taus.
+            # Use the full length of the session just in case of an extremely large tau.
+            reversed_t = np.flipud(np.arange(forager.n_trials+1))
+            forager.history_filter = np.zeros_like(reversed_t).astype('float64')
+            for tau, w_tau in zip(forager.taus, forager.w_taus):
+                # Note the normalization term (= tau when n -> inf.)
+                forager.history_filter += w_tau * \
+                                        np.exp(-reversed_t / tau) / \
+                                        np.sum(np.exp(-reversed_t / tau))
+
+        for t in range(forager.n_trials):
+            action = forager.act()
+            forager.step(action)
+        #for k, v in vars(forager).items():
+        #    if v is not None:
+        #        print(f'{k}: {v}')
+    
+    else:
+        raise ValueError('wrong gen_type for q generation')
+
     return forager.q_estimation
 
 
@@ -236,7 +251,7 @@ if __name__ == "__main__":
 
 
     # generate simulated neurons
-    n_neurons = 120
+    n_neurons = 300
     neuron_types = ['Q_left', 'Q_right', 'sigma_Q', 'delta_Q', 'rw']
 
     sim_neuron_columns = ['session', 'neuron_id', 'firing_rates']
@@ -266,7 +281,7 @@ if __name__ == "__main__":
     # compute the test statistic: t values of regression with q generation
     # generating pseudo sessions (pseudo Qs)
 
-    n_pseudo_sessions = 120
+    n_pseudo_sessions = 200
 
     # pseudo_session fit
     ps_fit_columns = ['gen_session', 'neuron_id', 'fit_session', 'tvalues_Q_left', 'tvalues_Q_right']
@@ -315,8 +330,8 @@ if __name__ == "__main__":
         print(f'end of session {session}: {X.shape}')
 
 
-    with open('./sim_neurons.pickle', 'wb') as handle:
+    with open('./ps_sim_neurons_n_300_ps_200.pickle', 'wb') as handle:
         pickle.dump(sim_neurons, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    with open('./df_ps_fit_dict.pickle', 'wb') as handle:
+    with open('./df_ps_fit_dict_n_300_ps_200.pickle', 'wb') as handle:
         pickle.dump(df_ps_fit_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
