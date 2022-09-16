@@ -218,7 +218,7 @@ def gen_qs_by_fitted_model(key, p_reward_trial, p_reward_block, block_lengths,
 if __name__ == "__main__":
 
     # generate session action-reward sequence
-    key = {'subject_id': 482353, 'session': 38, 'model_id': 10}
+    key = {'subject_id': 482353, 'session': 42, 'model_id': 10}
     sessions = [key['session']]
 
     # get fitted q variables
@@ -251,7 +251,7 @@ if __name__ == "__main__":
 
 
     # generate simulated neurons
-    n_neurons = 300
+    n_neurons = 120
     neuron_types = ['Q_left', 'Q_right', 'sigma_Q', 'delta_Q', 'rw']
 
     sim_neuron_columns = ['session', 'neuron_id', 'firing_rates']
@@ -281,7 +281,7 @@ if __name__ == "__main__":
     # compute the test statistic: t values of regression with q generation
     # generating pseudo sessions (pseudo Qs)
 
-    n_pseudo_sessions = 200
+    n_pseudo_sessions = 120
 
     # pseudo_session fit
     ps_fit_columns = ['gen_session', 'neuron_id', 'fit_session', 'tvalues_Q_left', 'tvalues_Q_right']
@@ -330,8 +330,8 @@ if __name__ == "__main__":
         print(f'end of session {session}: {X.shape}')
 
 
-    with open('./ps_sim_neurons_n_300_ps_200.pickle', 'wb') as handle:
+    with open('./ps_sim_neurons_sess_42_n_120_ps_120.pickle', 'wb') as handle:
         pickle.dump(sim_neurons, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    with open('./df_ps_fit_dict_n_300_ps_200.pickle', 'wb') as handle:
+    with open('./df_ps_fit_dict_sess_42_n_120_ps_120.pickle', 'wb') as handle:
         pickle.dump(df_ps_fit_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
