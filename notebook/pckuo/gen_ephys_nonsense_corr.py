@@ -118,7 +118,6 @@ if __name__ == "__main__":
         df_Q_left = df_Q[df_Q['water_port']=='left'][['session', 'trial', 'action_value']].rename(columns={'action_value': 'Q_left'})#.reset_index(drop=True)
         df_Q_right = df_Q[df_Q['water_port']=='right'][['session', 'trial', 'action_value']].rename(columns={'action_value': 'Q_right'})#.reset_index(drop=True)
         df_Qs = df_Q_left.merge(df_Q_right)
-        q_latents[region] = df_Qs
 
         sessions_all = np.unique(df_Qs['session'].values)
         sessions = sessions_all[sessions_all > latter_session]
@@ -157,7 +156,8 @@ if __name__ == "__main__":
                     if np.any(trials_q_not_in_unit):
                         print(f' mismatch: {region} {session}, trials_q_not_in_unit: {trials_q_not_in_unit}')
                         for t in trials_q_not_in_unit:
-                            df_Qs_session.drop(df_Qs_session[df_Qs_session['trial']==t].index, inplace=True)
+                            df_Qs.drop(df_Qs[(df_Qs['session']==session) &
+                                             (df_Qs['trial']==t)].index, inplace=True)
                     trials_q = trials_q[np.isin(trials_q, trials_unit)]
 
                     firing_rate = period_activity['firing_rates']
@@ -166,9 +166,12 @@ if __name__ == "__main__":
 
                     neurons[region].loc[len(neurons[region].index)] = [session, unit, valid_firing_rate]
 
+        q_latents[region] = df_Qs
+
+
     # save the data df if not existed
-    with open('./neurons_data_match_iti_all.pickle', 'wb') as handle:
-        pickle.dump(neurons, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    with open('./neurons_data_match_iti_all.pickle', 'wb') as f_handle:
+        pickle.dump(neurons, f_handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     with open('./q_latents_match.pickle', 'wb') as handle:
         pickle.dump(q_latents, handle, protocol=pickle.HIGHEST_PROTOCOL)
