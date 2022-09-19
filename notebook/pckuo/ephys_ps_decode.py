@@ -54,7 +54,7 @@ if __name__ == "__main__":
     regions_to_fit = ['ALM', 'PL', 'ACA', 'ORB', 'LSN', 'striatum', 'MD']
     target_variables = ['Q_left', 'Q_right', 'sigma_Q', 'delta_Q']
 
-    ps_decode_columns = ['src_session', 'unit', 'fit_session', 'target_variable', 'ftest_pvalue']
+    ps_decode_columns = ['src_session', 'unit', 'fit_session', 'target_variable', 'ftest_pvalue', 'mse_total']
     df_ps_decode_dict = {region: pd.DataFrame(columns=ps_decode_columns) for region in regions_to_fit}
 
 
@@ -102,7 +102,8 @@ if __name__ == "__main__":
                     results = model.fit()
                     df_ps_fit.loc[len(df_ps_fit.index)] = [session, unit, session, 
                                                         target_variable, 
-                                                        results.f_pvalue]
+                                                        results.f_pvalue,
+                                                        results.mse_total]
 
                     # fit pseudo sessions
                     df_pseudo_sessions_session_unit = df_pseudo_sessions_session.sample(n=n_pseudo_sessions)
@@ -124,7 +125,8 @@ if __name__ == "__main__":
                         results = model.fit()
                         df_ps_fit.loc[len(df_ps_fit.index)] = [session, unit, -1*(row['gen_id']),
                                                             target_variable, 
-                                                            results.f_pvalue]
+                                                            results.f_pvalue,
+                                                            results.mse_total]
 
 
     # save the ps population decoding df if not existed
